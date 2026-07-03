@@ -3016,11 +3016,13 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     const float dynamic_h_budget =
         std::max({ text_source_bbox_h, text_bbox_h, object_h * 2.0f, 256.0f });
     const float layer_max_w =
-        has_text_effect ? object_w : (wants_dynamic_text ? dynamic_w_budget : text_source_bbox_w);
+        wants_dynamic_text ? dynamic_w_budget : std::max(object_w, text_source_bbox_w);
     const float layer_max_h =
-        has_text_effect ? object_h : (wants_dynamic_text ? dynamic_h_budget : text_source_bbox_h);
+        wants_dynamic_text ? dynamic_h_budget : std::max(object_h, text_source_bbox_h);
     const i32 layer_w = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_w, layer_max_w)));
     const i32 layer_h = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_h, layer_max_h)));
+    const float effect_surface_w = static_cast<float>(layer_w);
+    const float effect_surface_h = static_cast<float>(layer_h);
     {
         auto&             scene   = *context.scene;
         const std::string addr    = getAddr(sp_node.as_ptr());
@@ -3157,23 +3159,27 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                             ? wpfbo.name + "_" + effaddr
                             : std::string(WE_SPEC_PREFIX) + wpfbo.name + "_" + effaddr;
                     auto fbo_size = [&]() -> std::array<uint16_t, 2> {
+                        // Text can reserve a source RT larger than the WE
+                        // object box so dynamic strings do not clip. Effect
+                        // ping-pong FBOs must follow that surface; otherwise
+                        // blur-like passes downsample then upscale the text.
                         if (wpfbo.fit > 0) {
-                            const float max_size = std::max(object_w, object_h);
+                            const float max_size = std::max(effect_surface_w, effect_surface_h);
                             if (max_size > 0.0f) {
                                 const float fit_scale = static_cast<float>(wpfbo.fit) / max_size;
                                 return {
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(object_w * fit_scale))),
+                                        std::max(1.0f, std::round(effect_surface_w * fit_scale))),
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(object_h * fit_scale))),
+                                        std::max(1.0f, std::round(effect_surface_h * fit_scale))),
                                 };
                             }
                         }
                         return {
                             static_cast<uint16_t>(
-                                std::max(1.0f, object_w / static_cast<float>(wpfbo.scale))),
+                                std::max(1.0f, effect_surface_w / static_cast<float>(wpfbo.scale))),
                             static_cast<uint16_t>(
-                                std::max(1.0f, object_h / static_cast<float>(wpfbo.scale))),
+                                std::max(1.0f, effect_surface_h / static_cast<float>(wpfbo.scale))),
                         };
                     }();
                     scene.renderTargets[rtname] = { .width      = fbo_size[0],
@@ -3237,7 +3243,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                     sv.propagatedParallaxDepth        = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
                     sv.parallaxDepth                  = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
                     sv.effect_projection_node         = compose_node.as_ptr();
-                    sv.effect_projection_size         = { object_w, object_h };
+                    sv.effect_projection_size = { effect_surface_w, effect_surface_h };
                     if (! LoadMaterial(*context.vfs,
                                        wpmat,
                                        &scene,
@@ -3318,24 +3324,36 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // bbox; UVs subsample the central text region of ppong_a (since the
     // ortho is layer-sized but glyphs occupy only text-bbox in the
     // middle).
-    auto rebuild_compose = [compose_ptr,
-                            anchor_state,
-                            apply_text_anchor,
-                            layer_w,
-                            layer_h,
-                            has_text_effect,
-                            object_w,
-                            object_h](float tw, float th, float source_w, float source_h) {
+    const bool text_can_expand_width  = ! obj.limitwidth;
+    const bool text_can_expand_height = ! obj.limitrows;
+    auto       rebuild_compose        = [compose_ptr,
+                                         anchor_state,
+                                         apply_text_anchor,
+                                         layer_w,
+                                         layer_h,
+                                         object_w,
+                                         object_h,
+                                         text_can_expand_width,
+                                         text_can_expand_height](float tw,
+                                                                float th,
+                                                                float source_w,
+                                                                float source_h) {
         if (tw <= 0.0f) tw = 1.0f;
         if (th <= 0.0f) th = 1.0f;
         if (source_w <= 0.0f) source_w = tw;
         if (source_h <= 0.0f) source_h = th;
-        if (has_text_effect) {
-            tw       = object_w;
-            th       = object_h;
-            source_w = object_w;
-            source_h = object_h;
-        }
+        auto visible_extent = [](float object_extent,
+                                 float natural_extent,
+                                 float source_extent,
+                                 bool  can_expand) {
+            const float needed = std::max(natural_extent, source_extent);
+            if (object_extent <= 0.0f) return needed;
+            return can_expand ? std::max(object_extent, needed) : object_extent;
+        };
+        tw       = visible_extent(object_w, tw, source_w, text_can_expand_width);
+        th       = visible_extent(object_h, th, source_h, text_can_expand_height);
+        source_w = tw;
+        source_h = th;
         anchor_state->width  = tw;
         anchor_state->height = th;
         compose_ptr->SetSize({ tw, th });
@@ -3345,8 +3363,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         const std::array<float, 12> pos {
             -hx, -hy, 0.0f, -hx, +hy, 0.0f, +hx, -hy, 0.0f, +hx, +hy, 0.0f,
         };
-        const float                u_half = 0.5f * std::min(1.0f, tw / float(layer_w));
-        const float                v_half = 0.5f * std::min(1.0f, th / float(layer_h));
+        const float                u_half = 0.5f * std::min(1.0f, source_w / float(layer_w));
+        const float                v_half = 0.5f * std::min(1.0f, source_h / float(layer_h));
         const float                u_l    = 0.5f - u_half;
         const float                u_r    = 0.5f + u_half;
         const float                v_t    = 0.5f - v_half;
