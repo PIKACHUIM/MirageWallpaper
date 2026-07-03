@@ -84,6 +84,20 @@ struct FrameInputs {
     uint32_t mouse_buttons_released { 0 };
 };
 
+// Snapshot of host media playback state, pushed in via JsRuntime::SetMediaStatus
+// (host → runtime). Mirrors the WE `MediaPlaybackEvent` JS enum for `state`;
+// the string fields feed the `mediaPropertiesChanged` / `mediaThumbnailChanged`
+// script callbacks. `art_url` is resolved as a texture key by the renderer.
+struct MediaStatus {
+    uint32_t    state { 0 };
+    std::string title;
+    std::string artist;
+    std::string album;
+    std::string album_artist;
+    std::string art_url;
+    std::string previous_art_url;
+};
+
 // --- script properties (configuration) --------------------------------------
 
 // One descriptor produced by createScriptProperties().addX() calls inside
@@ -150,6 +164,13 @@ public:
     // `property` should be the descriptor object shape used by project.json
     // (`{value: ...}` plus optional metadata).
     void SetUserProperty(std::string_view key, const nlohmann::json& property);
+
+    // Dispatch Wallpaper Engine media callbacks for the current media
+    // snapshot. Call from the renderer owner thread. Fans out
+    // `mediaPlaybackChanged` / `mediaPropertiesChanged` /
+    // `mediaThumbnailChanged` to every live FieldScript that exports them,
+    // edge-detecting changes so unchanged snapshots are no-ops.
+    void SetMediaStatus(const MediaStatus& status);
 
     using BoneIndexResolver = std::function<uint32_t(sr::SceneNode*, std::string_view)>;
     using BoneTransformResolver =
@@ -263,6 +284,11 @@ void TickSceneScripts(sr::Scene& scene, const FrameInputs& fi);
 // Patch `engine.userProperties` on the ScriptScene attached to `scene`.
 // No-op when the scene has no script runtime.
 void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const nlohmann::json& property);
+
+// Forward a media-status snapshot to the ScriptScene attached to `scene`,
+// dispatching the WE media callbacks. No-op when the scene has no script
+// runtime.
+void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status);
 
 // Forward `SetPersistence` to the ScriptScene attached to `scene`. No-op
 // when the scene has no script runtime.

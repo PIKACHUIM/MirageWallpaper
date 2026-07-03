@@ -32,6 +32,7 @@ target_sources(SceneRendererBase
          ../AppRuntime/Timing/WorkerTimer.cppm
          ../AppRuntime/Timing/FrameClock.cppm
          ../Domain/Scene/Lighting/LightingModel.cppm
+         ../Domain/Scene/Visibility.cppm
          ../Domain/Scene/World.cppm)
 target_link_libraries(SceneRendererBase
   PUBLIC rstd::rstd rstd.cppstd Eigen3::Eigen wavsen::audio SceneRendererTypes nlohmann_json

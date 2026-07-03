@@ -83,7 +83,8 @@ bool ImageEffect::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
 bool ImageEffect::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersion /*v*/) {
     std::string filePath;
     sr::GetJsonValue(json, "file", filePath);
-    sr::GetJsonValue(json, "visible", visible, false);
+    ReadVisibleProperty(json, visible, visible_user);
+    visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "name", name, false);
     sr::GetJsonValue(json, "username", username, false);
     if (this->IsEffectBlacklisted(filePath)) {
@@ -176,8 +177,7 @@ bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
 
 bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersion /*v*/) {
     sr::GetJsonValue(json, "image", image);
-    sr::GetJsonValue(json, "visible", visible, false);
-    ReadVisibleUserBinding(json, visible_user);
+    ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "alignment", alignment, false);
     nlohmann::json jImage;
@@ -211,6 +211,8 @@ bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersio
     ReadUserValueBinding(json, "color", color_user);
     color_user_key = color_user.name;
     sr::GetJsonValue(json, "alpha", alpha, false);
+    ReadUserValueBinding(json, "alpha", alpha_user);
+    alpha_user_key = alpha_user.name;
     sr::GetJsonValue(json, "brightness", brightness, false);
 
     sr::GetJsonValue(jImage, "puppet", puppet, false);

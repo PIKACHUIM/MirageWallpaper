@@ -68,6 +68,8 @@ public:
     std::string           name;
     std::string           username; // PKGV0001+; per-instance label override
     bool                  visible { true };
+    VisibleUserBinding    visible_user;
+    std::string           visible_user_key;
     int32_t               version;
     std::vector<Material> materials;
     std::vector<MaterialPass>  passes;
@@ -141,6 +143,8 @@ public:
     std::string        visible_user_key;
     UserValueBinding   color_user;
     std::string        color_user_key;
+    UserValueBinding   alpha_user;
+    std::string        alpha_user_key;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(EffectFbo, name, scale);

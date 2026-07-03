@@ -17,8 +17,7 @@ bool LightObject::FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*
     sr::GetJsonValue(json, "light", light);
     sr::GetJsonValue(json, "radius", radius);
     sr::GetJsonValue(json, "intensity", intensity);
-    sr::GetJsonValue(json, "visible", visible, false);
-    ReadVisibleUserBinding(json, visible_user);
+    ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "name", name, false);
     sr::GetJsonValue(json, "id", id, false);

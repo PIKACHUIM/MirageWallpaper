@@ -5,6 +5,7 @@ module;
 
 export module sr.scene;
 import eigen;
+import nlohmann.json;
 import rstd;
 import sr.core;
 import rstd.cppstd;
@@ -13,6 +14,7 @@ import sr.spec_texs;
 
 // SceneLight + SceneLightType live in this partition. Re-exported here so
 // existing `import sr.scene` consumers see them transparently.
+export import :visibility;
 export import :lighting;
 
 export namespace sr
@@ -175,6 +177,15 @@ public:
     uint32_t ID() const { return m_id; }
     void     SetID(uint32_t id) { m_id = id; }
 
+    // TODO(4b41483): upstream tracks a real per-array data generation counter
+    // (bumped on every Assign/mutation) used by RenderBufferResolver's static
+    // mesh-cache key. The port now mirrors that via m_generation +
+    // BumpDataGeneration() so the resolver's cache key coarsely tracks data
+    // mutations (a single counter rather than upstream's per-stream granularity
+    // for the index array, which only has one stream anyway).
+    uint64_t DataGeneration() const noexcept { return m_generation; }
+    void     BumpDataGeneration() noexcept { ++m_generation; }
+
 private:
     bool IncreaseCheckSet(size_t size);
 
@@ -185,6 +196,7 @@ private:
     usize m_render_size { std::numeric_limits<usize>::max() };
 
     uint32_t m_id;
+    uint64_t m_generation { 0 };
 };
 
 // ============================================================================
@@ -240,6 +252,12 @@ public:
     static uint8_t TypeCount(VertexType);
     static uint8_t RealAttributeSize(const SceneVertexAttribute&);
 
+    // TODO(4b41483): see SceneIndexArray::DataGeneration — same model. The
+    // port bumps a single per-stream counter on every mutation; upstream
+    // carries the same per-stream counter so this matches.
+    uint64_t DataGeneration() const noexcept { return m_generation; }
+    void     BumpDataGeneration() noexcept { ++m_generation; }
+
 private:
     bool TrySetSize(usize) noexcept;
 
@@ -253,6 +271,7 @@ private:
     usize  m_capacity { 0 };
 
     uint32_t m_id;
+    uint64_t m_generation { 0 };
 };
 
 // Build a SceneVertexAttribute vector from compile-time VertexAttrSpec literals.
@@ -275,9 +294,17 @@ MakeAttrSet(std::initializer_list<VertexAttrSpec> specs) {
 // SceneMaterial.h
 // ============================================================================
 
+struct SceneAnimationCurve;
+
+struct SceneShaderValueAnimation {
+    ShaderValue                          base;
+    std::shared_ptr<SceneAnimationCurve> curve;
+};
+
 struct SceneMaterialCustomShader {
-    std::shared_ptr<SceneShader> shader;
-    ShaderValues                 constValues;
+    std::shared_ptr<SceneShader>                shader;
+    ShaderValues                                constValues;
+    Map<std::string, SceneShaderValueAnimation> valueAnimations;
     // Set when constValues was mutated outside of prepare()/parse — e.g. a
     // RenderSetUserProperty handler writing a new user-property value. The
     // pass's per-frame update_op picks this up, re-writes the affected cbuffer
@@ -293,6 +320,21 @@ public:
     SceneMaterial& operator=(const SceneMaterial&) = default;
     SceneMaterial& operator=(SceneMaterial&&)      = default;
 
+    bool SetShaderValue(std::string uniform_name, const ShaderValue& value) {
+        if (uniform_name.empty()) return false;
+        auto shaped                            = ShapeShaderValue(uniform_name, value);
+        customShader.constValues[uniform_name] = shaped;
+        if (auto it = customShader.valueAnimations.find(uniform_name);
+            it != customShader.valueAnimations.end()) {
+            it->second.base = shaped;
+        }
+        customShader.dirty = true;
+        return true;
+    }
+    bool SetShaderValueAnimation(std::string                          uniform_name,
+                                 std::shared_ptr<SceneAnimationCurve> curve);
+    bool TickShaderValueAnimations(double runtime);
+
     std::string              name;
     std::vector<std::string> textures;
     std::vector<std::string> defines;
@@ -304,6 +346,27 @@ public:
     bool                      depth_test { false };
     bool                      depth_write { false };
     CullMode                  cull_mode { CullMode::None };
+
+private:
+    ShaderValue ShapeShaderValue(std::string_view uniform_name, const ShaderValue& value) const {
+        if (value.size() != 1) return value;
+
+        size_t target_size = 0;
+        if (auto it = customShader.constValues.find(std::string(uniform_name));
+            it != customShader.constValues.end()) {
+            target_size = it->second.size();
+        }
+        if (target_size <= 1 && customShader.shader) {
+            if (auto it = customShader.shader->default_uniforms.find(std::string(uniform_name));
+                it != customShader.shader->default_uniforms.end()) {
+                target_size = it->second.size();
+            }
+        }
+        if (target_size <= 1 || target_size > 4) return value;
+
+        std::vector<float> shaped(target_size, value[0]);
+        return ShaderValue(std::span<const float>(shaped));
+    }
 };
 
 // ============================================================================
@@ -348,6 +411,23 @@ public:
     const auto& Dirty() const { return m_dirty; }
     auto&       Dirty() { return m_dirty; }
     void        SetDirty() { m_dirty.store(true); }
+
+    // TODO(4b41483): upstream SceneMesh carries a bitfield dirty-mask
+    // (SceneMeshDirtyData / SceneMeshDirtyLayout) consumed by
+    // RenderBufferResolver::updateDynamicDrawBuffers. The port's SceneMesh
+    // only has a single boolean dirty flag, so these adapters fold every
+    // data-mutation onto that flag. When the real bitfield model is ported,
+    // replace these wrappers.
+    using SceneMeshDirtyFlags = uint32_t;
+    static constexpr SceneMeshDirtyFlags SceneMeshDirtyData { 1u << 0u };
+    SceneMeshDirtyFlags                  DirtyFlags() const {
+        return m_dirty.load(std::memory_order_relaxed) ? SceneMeshDirtyData : 0u;
+    }
+    void SetLayoutDirty() { SetDirty(); }
+    SceneMeshDirtyFlags ConsumeDirtyFlags(SceneMeshDirtyFlags /*mask*/) {
+        bool was = m_dirty.exchange(false, std::memory_order_relaxed);
+        return was ? SceneMeshDirtyData : 0u;
+    }
 
     uint32_t ID() const { return m_id; };
     void     SetID(uint32_t v) { m_id = v; };
@@ -614,6 +694,7 @@ public:
     SceneAnimationCurve                 rotation_curve;
     SceneAnimationCurve                 zoom_curve;
     SceneAnimationCurve                 fov_curve;
+    SceneUserVisibilityBinding          visible_user_binding;
 
     void CaptureViewport();
     void SetEnabled(bool value) { enabled = value; }
@@ -756,11 +837,14 @@ public:
     }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 
-    // Recorded when the layer's `visible` field is authored as
-    // `{user:"<key>", value:bool}`. The render handler walks the tree on
-    // RenderSetUserProperty and flips SetVisible(value) for matching nodes.
-    const std::string& VisibleUserKey() const { return m_visible_user_key; }
-    void               SetVisibleUserKey(std::string k) { m_visible_user_key = std::move(k); }
+    const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
+    void               SetVisibleUserKey(std::string k) {
+        m_visible_user_binding = SceneUserVisibilityBinding { .key = std::move(k) };
+    }
+    const SceneUserVisibilityBinding& VisibleUserBinding() const { return m_visible_user_binding; }
+    void                              SetVisibleUserBinding(SceneUserVisibilityBinding binding) {
+        m_visible_user_binding = std::move(binding);
+    }
 
     bool  IsBrightnessOverridden() const { return m_brightness_overridden; }
     float Brightness() const { return m_brightness; }
@@ -886,7 +970,7 @@ private:
     Eigen::Vector2f m_size { 0.0f, 0.0f };
 
     bool                               m_visible { true };
-    std::string                        m_visible_user_key {};
+    SceneUserVisibilityBinding         m_visible_user_binding {};
     float                              m_user_alpha { 1.0f };
     bool                               m_alpha_overridden { false };
     SceneNode*                         m_alpha_source { nullptr };
@@ -936,6 +1020,8 @@ struct SceneImageEffect {
     };
     std::vector<Command>            commands;
     std::list<SceneImageEffectNode> nodes;
+    SceneUserVisibilityBinding      visible_user_binding;
+    bool                            runtime_visible { true };
 };
 
 class SceneImageEffectLayer {
@@ -947,8 +1033,19 @@ public:
         m_effects.push_back(node);
         m_resolved = false;
     }
+    bool SetEffectRuntimeVisible(SceneImageEffect& effect, bool visible) {
+        if (effect.runtime_visible == visible) return false;
+        effect.runtime_visible = visible;
+        m_resolved             = false;
+        return true;
+    }
     std::size_t EffectCount() const { return m_effects.size(); }
     auto&       GetEffect(std::size_t index) { return m_effects.at(index); }
+    bool        HasRuntimeVisibleEffect() const {
+        return std::any_of(m_effects.begin(), m_effects.end(), [](const auto& effect) {
+            return effect && effect->runtime_visible;
+        });
+    }
     const auto& FirstTarget() const { return m_pingpong_a; }
     SceneMesh&  FinalMesh() const { return *m_final_mesh; }
     void        SetFullscreen(bool value) {
@@ -971,6 +1068,8 @@ public:
         m_resolved     = false;
     }
     const auto& FinalTarget() const { return m_final_target; }
+    void        SetSkipWhenNoRuntimeEffect(bool value) { m_skip_when_no_runtime_effect = value; }
+    bool        SkipWhenNoRuntimeEffect() const { return m_skip_when_no_runtime_effect; }
 
     // Idempotent: second and later calls are no-ops until any of the
     // mutating setters above (or AddEffect) flips m_resolved back to false.
@@ -988,6 +1087,7 @@ private:
     bool                       m_final_depth_write { false };
     CullMode                   m_final_cull_mode { CullMode::None };
     std::string                m_final_target { SpecTex_Default };
+    bool                       m_skip_when_no_runtime_effect { false };
     bool                       m_resolved { false };
 
     std::vector<std::shared_ptr<SceneImageEffect>> m_effects;
@@ -1042,6 +1142,7 @@ struct Particle {
     Eigen::Vector3f angularVelocity { 0.0f, 0.0f, 0.0f };
     Eigen::Vector3f angularAcceleration { 0.0f, 0.0f, 0.0f };
 
+    float     random { 0.0f };
     bool      mark_new { true };
     InitValue init {};
 };
@@ -1062,6 +1163,7 @@ struct ParticleInfo {
     std::span<const ParticleControlpoint> controlpoints;
     Eigen::Matrix3d                       world_from_local_dir { Eigen::Matrix3d::Identity() };
     Eigen::Matrix3d                       local_from_world_dir { Eigen::Matrix3d::Identity() };
+    bool                                  world_space { false };
     double                                time;
     double                                time_pass;
 };
@@ -1402,7 +1504,7 @@ public:
     ParticleSubSystem(ParticleSystem& p, std::shared_ptr<SceneMesh> sm, uint32_t maxcount,
                       double rate, u32 maxcount_instance, double probability, SpawnType type,
                       ParticleRawGenSpecOp specOp, ParticleFollowAnchor follow_anchor = {},
-                      u32 trail_length = 0, double start_time = 0.0);
+                      u32 trail_length = 0, double start_time = 0.0, bool world_space = false);
     ~ParticleSubSystem();
 
     void Emitt();
@@ -1449,6 +1551,7 @@ private:
     double               m_rate;
     double               m_time;
     double               m_start_time { 0.0 };
+    bool                 m_world_space { false };
     bool                 m_started { false };
 
     std::vector<std::unique_ptr<ParticleSubSystem>> m_children;
@@ -1598,17 +1701,28 @@ public:
 
     Map<std::string, std::vector<std::shared_ptr<SceneSoundControl>>> sound_volume_user_index;
 
-    struct ImageColorBinding {
+    struct ImagePropertyBinding {
         SceneNode*                  node { nullptr };
         std::vector<SceneMaterial*> materials;
     };
-    Map<std::string, std::vector<ImageColorBinding>> image_color_user_index;
+    Map<std::string, std::vector<ImagePropertyBinding>> image_color_user_index;
+    Map<std::string, std::vector<ImagePropertyBinding>> image_alpha_user_index;
 
     Map<std::string, std::vector<std::string>> camera_parallax_user_var_index;
 
     Map<std::string, std::vector<std::string>> camera_shake_user_var_index;
 
     Map<std::string, std::vector<std::shared_ptr<SceneCameraPath>>> camera_path_user_index;
+
+    // Apply a user-property update to every visibility binding of the named
+    // kind. Each returns whether anything flipped such that the render graph
+    // must be rebuilt.
+    bool ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property);
+    bool ApplyUserImageEffectVisibilityBindings(std::string_view      key,
+                                                const nlohmann::json& property);
+    bool ApplyUserLightVisibilityBindings(std::string_view key, const nlohmann::json& property);
+    bool ApplyUserCameraPathVisibilityBindings(std::string_view      key,
+                                               const nlohmann::json& property);
 
     // Scene-tree root. After parse handoff to the render thread, the tree
     // shape under `sceneGraph` is immutable until Scene destruction (see the
@@ -1680,6 +1794,7 @@ public:
     }
 
     void TickCameraPaths();
+    void TickMaterialShaderAnimations();
     void CaptureCameraPathViewports();
 };
 

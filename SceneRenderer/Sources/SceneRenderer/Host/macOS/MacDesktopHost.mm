@@ -12,6 +12,32 @@ extern "C" void  SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void  SceneRendererMacMetalDisplayDraw(void* handle, void* texture, std::uint32_t width,
                                                   std::uint32_t height);
 
+// --- mpris / media-status routing (port of upstream WW_EVT_IN_MPRIS) -------
+//
+// Upstream's `waywallen/scene_main.cpp` receives WW_EVT_IN_MPRIS events from
+// the wayland compositor (Linux mpris) and forwards them to
+// `owe::SceneWallpaper::setMediaStatus(...)`. The runtime-side support is
+// fully ported: `sr::SceneWallpaper::setMediaStatus(sr::MediaStatus)` is the
+// entry point and propagates the snapshot into the script runtime as
+// `mediaPlaybackChanged` / `mediaPropertiesChanged` / `mediaThumbnailChanged`
+// JS callbacks (see ScriptRuntime.cpp + WallpaperEngineRuntime.cpp).
+//
+// macOS has no mpris equivalent. The natural media-event sources here are
+// `MPNowPlayingInfoCenter` / `MPMusicPlayerController` (MediaPlayer.framework)
+// or `NSDistributedNotificationCenter` for the "now playing" feed. This
+// MacDesktopHost is a generic desktop-window/input host and intentionally
+// does NOT own the `sr::SceneWallpaper` (the app layer — e.g.
+// Tools/SceneWallpaper/WallpaperApp.cpp — owns it and wires these callbacks
+// to it). So media-status routing belongs there, not here.
+//
+// TODO(macos-media): when a macOS now-playing observer is added, have it
+// construct an `sr::MediaStatus` from the now-playing dictionary and call
+// `wallpaper.setMediaStatus(...)` on the app's `sr::SceneWallpaper` instance.
+// The `state` field maps to the WE `MediaPlaybackEvent` JS enum
+// (0=PLAYBACK_STOPPED, 1=PLAYBACK_PLAYING, 2=PLAYBACK_PAUSED); `art_url`
+// should be a `file://...` or absolute path so TextureDecoder's
+// ResolveExternalImagePath can percent-decode + load it.
+
 @interface SceneRendererWallpaperWindow : NSWindow
 @end
 

@@ -4,6 +4,7 @@ module;
 
 module sr.scene;
 import eigen;
+import nlohmann.json;
 import rstd;
 import rstd.cppstd;
 
@@ -11,6 +12,13 @@ import sr.fs;
 
 namespace sr
 {
+
+// TODO(4b41483): upstream Scene gains a SceneResourceIndex + RebuildResourceIndex
+// (+ RenderSceneSnapshot / RenderItemId / render_items) that the render planner
+// and VulkanRender consume. The port's Scene still exposes sceneGraph / cameras /
+// renderTargets directly and walks the graph per-frame. The full
+// resource-index/snapshot model (~700 lines) is deferred until its consumers
+// (SceneRenderPlanner, VulkanFrameEngine RenderProgram traversal) are ported.
 
 namespace
 {
@@ -125,6 +133,37 @@ eval_lookat_tracks(std::span<const SceneCameraLookAtTrack> tracks, double runtim
     }
     return eval_lookat_track(tracks.back(), tracks.back().duration);
 }
+
+bool shader_values_equal(const ShaderValue& a, const ShaderValue& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+ShaderValue eval_shader_value_animation(const SceneShaderValueAnimation& animation,
+                                        double                           runtime) {
+    if (! animation.curve || animation.curve->Empty() || animation.base.size() == 0)
+        return animation.base;
+
+    std::vector<float> value(animation.base.size());
+    for (std::size_t i = 0; i < animation.base.size(); ++i) value[i] = animation.base[i];
+
+    if (value.size() == 1) {
+        value[0] = animation.curve->EvaluateScalar(value[0], runtime);
+        return ShaderValue(std::span<const float>(value));
+    }
+
+    Eigen::Vector3f base { value[0],
+                           value.size() > 1 ? value[1] : 0.0f,
+                           value.size() > 2 ? value[2] : 0.0f };
+    auto            animated = animation.curve->EvaluateVec3(base, runtime);
+    value[0]                 = animated.x();
+    if (value.size() > 1) value[1] = animated.y();
+    if (value.size() > 2) value[2] = animated.z();
+    return ShaderValue(std::span<const float>(value));
+}
 } // namespace
 
 bool SceneAnimationCurve::Empty() const { return c0.empty() && c1.empty() && c2.empty(); }
@@ -144,6 +183,42 @@ Eigen::Vector3f SceneAnimationCurve::EvaluateVec3(const Eigen::Vector3f& base,
     if (! c1.empty()) value.y() = relative ? base.y() + eval_axis(c1, frame) : eval_axis(c1, frame);
     if (! c2.empty()) value.z() = relative ? base.z() + eval_axis(c2, frame) : eval_axis(c2, frame);
     return value;
+}
+
+bool SceneMaterial::SetShaderValueAnimation(std::string                          uniform_name,
+                                            std::shared_ptr<SceneAnimationCurve> curve) {
+    if (uniform_name.empty() || ! curve || curve->Empty()) return false;
+
+    ShaderValue base;
+    if (auto it = customShader.constValues.find(uniform_name);
+        it != customShader.constValues.end()) {
+        base = it->second;
+    } else if (customShader.shader) {
+        if (auto it = customShader.shader->default_uniforms.find(uniform_name);
+            it != customShader.shader->default_uniforms.end()) {
+            base = ShapeShaderValue(uniform_name, it->second);
+        }
+    }
+    if (base.size() == 0) return false;
+
+    customShader.valueAnimations[std::move(uniform_name)] =
+        SceneShaderValueAnimation { .base = base, .curve = std::move(curve) };
+    return true;
+}
+
+bool SceneMaterial::TickShaderValueAnimations(double runtime) {
+    bool changed = false;
+    for (auto& [uniform_name, animation] : customShader.valueAnimations) {
+        ShaderValue value = eval_shader_value_animation(animation, runtime);
+        if (auto it = customShader.constValues.find(uniform_name);
+            it != customShader.constValues.end() && shader_values_equal(it->second, value)) {
+            continue;
+        }
+        customShader.constValues[uniform_name] = std::move(value);
+        changed                                = true;
+    }
+    if (changed) customShader.dirty = true;
+    return changed;
 }
 
 void SceneCameraPath::CaptureViewport() {
@@ -232,6 +307,29 @@ void Scene::TickCameraPaths() {
     for (const auto& name : touched) UpdateLinkedCamera(name);
 }
 
+void Scene::TickMaterialShaderAnimations() {
+    std::unordered_set<SceneMaterial*> visited;
+    auto                               tick_material = [&](SceneMaterial* mat) {
+        if (mat && visited.insert(mat).second) mat->TickShaderValueAnimations(elapsingTime);
+    };
+    std::function<void(SceneNode*)> walk = [&](SceneNode* n) {
+        if (! n) return;
+        if (auto* mesh = n->Mesh()) {
+            for (auto& slot : mesh->MaterialSlots()) tick_material(slot.get());
+        }
+        for (auto& c : n->GetChildren()) walk(c.as_ptr());
+    };
+    walk(sceneGraph.as_ptr());
+    for (auto& pp : post_processes) {
+        if (! pp) continue;
+        for (auto& step : pp->steps) {
+            if (auto* pass = std::get_if<ScenePostProcessPass>(&step)) {
+                if (pass->node) walk(pass->node.as_ptr());
+            }
+        }
+    }
+}
+
 void Scene::TickTransformUpdaters() {
     for (auto& update : transform_updaters) update(elapsingTime);
 }
@@ -240,6 +338,77 @@ void Scene::CaptureCameraPathViewports() {
     for (auto& path : camera_paths) {
         if (path) path->CaptureViewport();
     }
+}
+
+bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property) {
+    bool                            requires_graph_rebuild = false;
+    std::function<void(SceneNode*)> walk                   = [&](SceneNode* n) {
+        if (! n) return;
+        if (auto visible = ResolveSceneUserVisibilityBinding(n->VisibleUserBinding(), key, property)) {
+            const bool was = n->Visible();
+            n->SetVisible(*visible);
+            requires_graph_rebuild |= was != n->Visible();
+        }
+        for (auto& c : n->GetChildren()) walk(c.as_ptr());
+    };
+    walk(sceneGraph.as_ptr());
+    return requires_graph_rebuild;
+}
+
+bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view      key,
+                                                   const nlohmann::json& property) {
+    bool                                  requires_graph_rebuild = false;
+    std::unordered_set<SceneImageEffect*> visited;
+    std::function<void(SceneNode*)>       walk = [&](SceneNode* n) {
+        if (! n) return;
+        if (! n->Camera().empty()) {
+            auto camera_it = cameras.find(n->Camera());
+            if (camera_it != cameras.end() && camera_it->second->HasImgEffect()) {
+                auto& effect_layer = camera_it->second->GetImgEffect();
+                for (usize i = 0; i < effect_layer->EffectCount(); ++i) {
+                    auto& effect = effect_layer->GetEffect(i);
+                    if (! effect || ! visited.insert(effect.get()).second) continue;
+                    auto visible =
+                        ResolveSceneUserVisibilityBinding(effect->visible_user_binding, key, property);
+                    if (! visible) continue;
+                    if (effect_layer->SetEffectRuntimeVisible(*effect, *visible)) {
+                        requires_graph_rebuild = true;
+                    }
+                }
+            }
+        }
+        for (auto& c : n->GetChildren()) walk(c.as_ptr());
+    };
+    walk(sceneGraph.as_ptr());
+    return requires_graph_rebuild;
+}
+
+bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const nlohmann::json& property) {
+    bool changed = false;
+    for (auto& light : lights) {
+        if (! light) continue;
+        auto visible = ResolveSceneUserVisibilityBinding(light->visibleUserBinding(), key, property);
+        if (! visible) continue;
+        changed |= light->runtimeVisible() != *visible;
+        light->setRuntimeVisible(*visible);
+    }
+    return changed;
+}
+
+bool Scene::ApplyUserCameraPathVisibilityBindings(std::string_view      key,
+                                                  const nlohmann::json& property) {
+    auto it = camera_path_user_index.find(std::string(key));
+    if (it == camera_path_user_index.end()) return false;
+
+    bool changed = false;
+    for (auto& path : it->second) {
+        if (! path) continue;
+        auto enabled = ResolveSceneUserVisibilityBinding(path->visible_user_binding, key, property);
+        if (! enabled) continue;
+        changed |= path->enabled != *enabled;
+        path->SetEnabled(*enabled);
+    }
+    return changed;
 }
 
 } // namespace sr

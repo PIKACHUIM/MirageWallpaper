@@ -28,6 +28,14 @@ import sr.scene_uniform_updater;
 using namespace sr;
 using namespace Eigen;
 
+// TODO(4b41483): upstream WPSceneParser gains a SceneShaderVariantDesc-based
+// path (MakeSceneShaderVariantDesc + MarkLayerVisibilityElidable +
+// WallpaperLayerId / hidden_link_source_ids handling) that builds the variant
+// descriptors consumed by WPShaderParser::CompileSceneShaderVariant. The port
+// lacks SceneShaderVariantDesc / WallpaperLayerId / hidden_link_source_ids, so
+// these additions are deferred together with the variant-compile API in
+// MaterialShaderCompiler.cppm.
+
 std::string getAddr(void* p) { return std::to_string(reinterpret_cast<intptr_t>(p)); }
 
 // ParseContext, SceneObjectVar, ProcessOpts and the stage entry points
@@ -154,6 +162,15 @@ Set<std::int32_t> CollectLinkedSourceIdsFromJson(const nlohmann::json& json) {
 
 void MarkHiddenLinkSource(ParseContext& context, std::int32_t id) {
     if (context.hidden_link_source_ids.count(id) != 0) context.scene->elidable_layer_ids.insert(id);
+}
+
+SceneUserVisibilityBinding
+ToSceneUserVisibilityBinding(const wpscene::VisibleUserBinding& binding) {
+    SceneUserVisibilityBinding out;
+    out.key           = binding.name;
+    out.condition     = binding.condition;
+    out.has_condition = binding.has_condition;
+    return out;
 }
 
 std::array<float, 2> Texture0UvScale(const SceneMaterial& material, bool nopadding = false) {
@@ -573,12 +590,13 @@ void WireCameraFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNo
 namespace
 {
 // mapRate < 1.0
-void GenCardMesh(SceneMesh& mesh, const std::array<uint16_t, 2> size,
-                 const std::array<float, 2> mapRate = { 1.0f, 1.0f }) {
-    float left   = -(size[0] / 2.0f);
-    float right  = size[0] / 2.0f;
-    float bottom = -(size[1] / 2.0f);
-    float top    = size[1] / 2.0f;
+void GenCardMesh(SceneMesh& mesh, const std::array<float, 2> size,
+                 const std::array<float, 2> mapRate         = { 1.0f, 1.0f },
+                 const Vector3f&            position_offset = Vector3f::Zero()) {
+    float left   = -(size[0] / 2.0f) + position_offset.x();
+    float right  = size[0] / 2.0f + position_offset.x();
+    float bottom = -(size[1] / 2.0f) + position_offset.y();
+    float top    = size[1] / 2.0f + position_offset.y();
     float z      = 0.0f;
 
     float tw = mapRate[0], th = mapRate[1];
@@ -1062,6 +1080,16 @@ bool UsesEffectQuadPositionSpace(const wpscene::Material& wpmat) {
     return mode_it != wpmat.combos.end() && mode_it->second == 1;
 }
 
+void NormalizeEffectPositionCurve(SceneAnimationCurve& curve) {
+    auto normalize_axis = [&](std::vector<SceneAnimationKey>& keys) {
+        for (auto& key : keys) {
+            key.value = curve.relative ? key.value * 2.0f : key.value * 2.0f - 1.0f;
+        }
+    };
+    normalize_axis(curve.c0);
+    normalize_axis(curve.c1);
+}
+
 // Register a (material, shader-info, wpmat) triple into the scene-wide user
 // variable index. Must be called AFTER the SceneMaterial has been moved into
 // a shared_ptr (e.g. `mesh->AddMaterial(std::move(local))`) and `stable_mat`
@@ -1104,8 +1132,8 @@ void RegisterShaderUserVarIndex(Scene* pScene, SceneMaterial* stable_mat,
     }
 }
 
-void LoadAlignment(SceneNode& node, std::string_view align, Vector2f size) {
-    Vector3f trans = node.Translate();
+Vector3f AlignmentOffset(std::string_view align, Vector2f size) {
+    Vector3f offset = Vector3f::Zero();
     size *= 0.5f;
     size.y() *= 1.0f;
 
@@ -1114,12 +1142,12 @@ void LoadAlignment(SceneNode& node, std::string_view align, Vector2f size) {
     };
 
     // topleft top center ...
-    if (contains("top")) trans.y() -= size.y();
-    if (contains("left")) trans.x() += size.x();
-    if (contains("right")) trans.x() -= size.x();
-    if (contains("bottom")) trans.y() += size.y();
+    if (contains("top")) offset.y() -= size.y();
+    if (contains("left")) offset.x() += size.x();
+    if (contains("right")) offset.x() -= size.x();
+    if (contains("bottom")) offset.y() += size.y();
 
-    node.SetTranslate(trans);
+    return offset;
 }
 
 // Apply effect-pass `bind` overrides onto wpmat.textures by index, using
@@ -1234,29 +1262,27 @@ void LoadConstvalue(SceneMaterial& material, const wpscene::Material& wpmat,
                     const WPShaderInfo& info) {
     // load glname from alias and load to constvalue
     for (const auto& cs : wpmat.constantshadervalues) {
-        const auto&               name  = cs.first;
-        const std::vector<float>& value = cs.second;
-        std::string               glname;
-        if (info.alias.count(name) != 0) {
-            glname = info.alias.at(name);
-        } else {
-            for (const auto& el : info.alias) {
-                if (el.second.substr(2) == name) {
-                    glname = el.second;
-                    break;
-                }
-            }
-        }
+        const auto&               name   = cs.first;
+        const std::vector<float>& value  = cs.second;
+        std::string               glname = ResolveShaderMaterialKey(info, name);
         if (glname.empty()) {
             rstd_error("ShaderValue: {} not found in glsl", name);
         } else {
             std::vector<float> const_value = value;
-            if (UsesEffectQuadPositionSpace(wpmat) && IsShaderPositionUniform(info, glname) &&
-                const_value.size() >= 2) {
+            bool               normalize_position =
+                UsesEffectQuadPositionSpace(wpmat) && IsShaderPositionUniform(info, glname);
+            if (normalize_position && const_value.size() >= 2) {
                 const_value[0] = const_value[0] * 2.0f - 1.0f;
                 const_value[1] = const_value[1] * 2.0f - 1.0f;
             }
             material.customShader.constValues[glname] = const_value;
+            if (auto it = wpmat.constantshadervalues_animations.find(name);
+                it != wpmat.constantshadervalues_animations.end()) {
+                auto curve =
+                    std::make_shared<SceneAnimationCurve>(ToSceneAnimationCurve(it->second));
+                if (normalize_position) NormalizeEffectPositionCurve(*curve);
+                material.SetShaderValueAnimation(glname, std::move(curve));
+            }
         }
     }
 }
@@ -1357,7 +1383,8 @@ void ParseCameraObj(ParseContext& context, wpscene::CameraObject& cam) {
         path_translate_bias + origin, Vector3f::Ones(), path_rotation_bias + angles, cam.name);
     node->ID() = cam.id;
     if (! cam.visible) node->SetVisible(false);
-    if (! cam.visible_user_key.empty()) node->SetVisibleUserKey(cam.visible_user_key);
+    if (! cam.visible_user.empty())
+        node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(cam.visible_user));
 
     if (cam.visible) camera->AttatchNode(node.as_ptr());
     if (use_perspective) {
@@ -1384,13 +1411,15 @@ void ParseCameraObj(ParseContext& context, wpscene::CameraObject& cam) {
     path->fov_base            = cam.fov;
     path->perspective         = use_perspective;
     path->enabled             = cam.visible;
+    if (! cam.visible_user.empty())
+        path->visible_user_binding = ToSceneUserVisibilityBinding(cam.visible_user);
     AssignCurve(path->origin_curve, cam.field_bindings, "origin");
     AssignCurve(path->rotation_curve, cam.field_bindings, "angles");
     AssignCurve(path->zoom_curve, cam.field_bindings, "zoom");
     AssignCurve(path->fov_curve, cam.field_bindings, "fov");
     scene.camera_paths.push_back(path);
-    if (! cam.visible_user_key.empty())
-        scene.camera_path_user_index[cam.visible_user_key].push_back(path);
+    if (! cam.visible_user.empty())
+        scene.camera_path_user_index[cam.visible_user.name].push_back(path);
 
     WireCameraFieldScripts(
         context, node, camera, path, cam.field_bindings, path_translate_bias, path_rotation_bias);
@@ -1404,7 +1433,7 @@ void InitContext(ParseContext& context, fs::VFS& vfs, wpscene::SceneMetadata& sc
     scene.imageParser        = std::make_unique<TextureAssetDecoder>(&vfs);
     scene.paritileSys->gener = std::make_unique<ParticleGeometryBuilder>();
     scene.shaderValueUpdater = std::make_unique<SceneUniformUpdater>(&scene);
-    GenCardMesh(scene.default_effect_mesh, { 2, 2 });
+    GenCardMesh(scene.default_effect_mesh, { 2.0f, 2.0f });
     context.shader_updater = static_cast<SceneUniformUpdater*>(scene.shaderValueUpdater.get());
 
     scene.clearColor = sc.general.clearcolor;
@@ -1489,7 +1518,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
 
     int32_t count_eff = 0;
     for (const auto& wpeffobj : wpimgobj.effects) {
-        if (wpeffobj.visible) count_eff++;
+        if (wpeffobj.visible || ! wpeffobj.visible_user.empty()) count_eff++;
     }
     bool hasEffect     = count_eff > 0;
     bool isPassthrough = wpimgobj.config.passthrough;
@@ -1530,21 +1559,23 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     }
 
     // wpimgobj.origin[1] = context.ortho_h - wpimgobj.origin[1];
-    auto spImgNode = rstd::sync::Arc<SceneNode>::make(Vector3f(wpimgobj.origin.data()),
+    auto           spImgNode = rstd::sync::Arc<SceneNode>::make(Vector3f(wpimgobj.origin.data()),
                                                       Vector3f(wpimgobj.scale.data()),
                                                       Vector3f(wpimgobj.angles.data()),
                                                       wpimgobj.name);
-    LoadAlignment(*spImgNode.as_ptr(), wpimgobj.alignment, { wpimgobj.size[0], wpimgobj.size[1] });
+    const Vector3f alignment_offset =
+        AlignmentOffset(wpimgobj.alignment, { wpimgobj.size[0], wpimgobj.size[1] });
     spImgNode->SetSize({ wpimgobj.size[0], wpimgobj.size[1] });
     spImgNode->SetPerspective(wpimgobj.perspective);
     spImgNode->SetBaseColor(Vector3f(wpimgobj.color.data()), wpimgobj.alpha);
     spImgNode->ID() = wpimgobj.id;
-    if (! wpimgobj.visible_user_key.empty())
-        spImgNode->SetVisibleUserKey(wpimgobj.visible_user_key);
-    std::vector<SceneMaterial*> image_color_materials;
-    auto                        track_image_color_material = [&](SceneMaterial* mat) {
-        if (! wpimgobj.color_user_key.empty() && mat != nullptr)
-            image_color_materials.push_back(mat);
+    if (! wpimgobj.visible_user.empty())
+        spImgNode->SetVisibleUserBinding(ToSceneUserVisibilityBinding(wpimgobj.visible_user));
+    std::vector<SceneMaterial*> image_property_materials;
+    auto                        track_image_property_material = [&](SceneMaterial* mat) {
+        if ((wpimgobj.color_user_key.empty() && wpimgobj.alpha_user_key.empty()) || mat == nullptr)
+            return;
+        image_property_materials.push_back(mat);
     };
     std::shared_ptr<WPPuppetLayer> image_puppet_layer;
     if (puppet && has_bones) {
@@ -1600,6 +1631,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         baseConstSvs["g_Color4"] = std::array<float, 4> {
             wpimgobj.color[0], wpimgobj.color[1], wpimgobj.color[2], wpimgobj.alpha
         };
+        baseConstSvs["g_Color"] =
+            std::array<float, 3> { wpimgobj.color[0], wpimgobj.color[1], wpimgobj.color[2] };
+        baseConstSvs["g_Alpha"]      = wpimgobj.alpha;
         baseConstSvs["g_UserAlpha"]  = wpimgobj.alpha;
         baseConstSvs["g_Brightness"] = wpimgobj.brightness;
 
@@ -1686,13 +1720,15 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             for (const auto& mb : pmesh.masks) {
                 target.Submeshes().emplace_back();
                 auto& pre_sm = target.Submeshes().back();
-                ModelAssetCompiler::GenMaskSubmeshFromMdl(pre_sm, pmesh, mb.part_ids_b, mapRate);
+                ModelAssetCompiler::GenMaskSubmeshFromMdl(
+                    pre_sm, pmesh, mb.part_ids_b, mapRate, alignment_offset);
                 pre_sm.material_slot   = slot++;
                 pre_sm.output_override = std::string(PUPPET_MASK_RT);
 
                 target.Submeshes().emplace_back();
                 auto& clip_sm = target.Submeshes().back();
-                ModelAssetCompiler::GenMaskSubmeshFromMdl(clip_sm, pmesh, mb.part_ids_a, mapRate);
+                ModelAssetCompiler::GenMaskSubmeshFromMdl(
+                    clip_sm, pmesh, mb.part_ids_a, mapRate, alignment_offset);
                 clip_sm.material_slot = slot++;
             }
         }
@@ -1700,11 +1736,12 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
 
     if (puppet) {
         if (hasEffect) {
-            GenCardMesh(mesh, { (uint16_t)wpimgobj.size[0], (uint16_t)wpimgobj.size[1] }, mapRate);
+            GenCardMesh(mesh, { wpimgobj.size[0], wpimgobj.size[1] }, mapRate, alignment_offset);
             for (const auto& m : puppet->meshes) {
                 if (m.positions.empty()) continue;
                 effct_final_mesh.Submeshes().emplace_back();
-                ModelAssetCompiler::GenMeshFromMdl(effct_final_mesh.Submeshes().back(), m, mapRate);
+                ModelAssetCompiler::GenMeshFromMdl(
+                    effct_final_mesh.Submeshes().back(), m, mapRate, alignment_offset);
             }
             if (has_bones) add_puppet_mask_submeshes(effct_final_mesh, 1);
 
@@ -1721,13 +1758,16 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             for (const auto& m : puppet->meshes) {
                 if (m.positions.empty()) continue;
                 mesh.Submeshes().emplace_back();
-                ModelAssetCompiler::GenMeshFromMdl(mesh.Submeshes().back(), m, mapRate);
+                ModelAssetCompiler::GenMeshFromMdl(mesh.Submeshes().back(), m, mapRate, alignment_offset);
             }
         }
     }
     if (! puppet) {
-        GenCardMesh(mesh, { (uint16_t)wpimgobj.size[0], (uint16_t)wpimgobj.size[1] }, mapRate);
-        GenCardMesh(effct_final_mesh, { (uint16_t)wpimgobj.size[0], (uint16_t)wpimgobj.size[1] });
+        GenCardMesh(mesh, { wpimgobj.size[0], wpimgobj.size[1] }, mapRate, alignment_offset);
+        GenCardMesh(effct_final_mesh,
+                    { wpimgobj.size[0], wpimgobj.size[1] },
+                    { 1.0f, 1.0f },
+                    alignment_offset);
     }
     // material blendmode for last step to use
     auto finalMaterialState = material;
@@ -1736,7 +1776,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         material.blenmode = BlendMode::Normal;
     }
     mesh.AddMaterial(std::move(material));
-    track_image_color_material(mesh.MaterialSlots().back().get());
+    track_image_property_material(mesh.MaterialSlots().back().get());
     RegisterShaderUserVarIndex(context.scene.get(), mesh.Material(), image_wpmat, shaderInfo);
 
     // Puppet clipping masks: each MaskBlock becomes a pair of submeshes.
@@ -1806,10 +1846,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 }
                 uint32_t pre_slot = (uint32_t)mesh.MaterialSlots().size();
                 mesh.AddMaterial(std::move(mask_scene_mat));
-                track_image_color_material(mesh.MaterialSlots().back().get());
+                track_image_property_material(mesh.MaterialSlots().back().get());
                 mesh.Submeshes().emplace_back();
                 auto& pre_sm = mesh.Submeshes().back();
-                ModelAssetCompiler::GenMaskSubmeshFromMdl(pre_sm, pmesh, mb.part_ids_b, mapRate);
+                ModelAssetCompiler::GenMaskSubmeshFromMdl(
+                    pre_sm, pmesh, mb.part_ids_b, mapRate, alignment_offset);
                 pre_sm.material_slot   = pre_slot;
                 pre_sm.output_override = std::string(PUPPET_MASK_RT);
 
@@ -1838,10 +1879,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 LoadConstvalue(clip_scene_mat, clip_wpmat, clip_shaderInfo);
                 uint32_t clip_slot = (uint32_t)mesh.MaterialSlots().size();
                 mesh.AddMaterial(std::move(clip_scene_mat));
-                track_image_color_material(mesh.MaterialSlots().back().get());
+                track_image_property_material(mesh.MaterialSlots().back().get());
                 mesh.Submeshes().emplace_back();
                 auto& clip_sm = mesh.Submeshes().back();
-                ModelAssetCompiler::GenMaskSubmeshFromMdl(clip_sm, pmesh, mb.part_ids_a, mapRate);
+                ModelAssetCompiler::GenMaskSubmeshFromMdl(
+                    clip_sm, pmesh, mb.part_ids_a, mapRate, alignment_offset);
                 clip_sm.material_slot = clip_slot;
             }
         }
@@ -1887,6 +1929,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         {
             imgEffectLayer->SetFullscreen(wpimgobj.fullscreen);
             imgEffectLayer->SetFinalMaterialState(finalMaterialState);
+            imgEffectLayer->SetSkipWhenNoRuntimeEffect(wpimgobj.fullscreen || isPassthrough);
             imgEffectLayer->FinalMesh().ChangeMeshDataFrom(effct_final_mesh);
             scene.cameras.at(nodeAddr)->AttatchImgEffect(imgEffectLayer);
         }
@@ -1915,11 +1958,16 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         std::string last_effect_shader;
         for (const auto& wpeffobj : wpimgobj.effects) {
             i_eff++;
-            if (! wpeffobj.visible) {
+            if (! wpeffobj.visible && wpeffobj.visible_user.empty()) {
                 i_eff--;
                 continue;
             }
             std::shared_ptr<SceneImageEffect> imgEffect = std::make_shared<SceneImageEffect>();
+            imgEffect->runtime_visible                  = wpeffobj.visible;
+            if (! wpeffobj.visible_user.empty()) {
+                imgEffect->visible_user_binding =
+                    ToSceneUserVisibilityBinding(wpeffobj.visible_user);
+            }
 
             // this will be replace when resolve, use here to get rt info
             const std::string inRT { effect_ppong_a };
@@ -2056,7 +2104,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                     }
                 }
                 spMesh->AddMaterial(std::move(material));
-                track_image_color_material(spMesh->MaterialSlots().back().get());
+                track_image_property_material(spMesh->MaterialSlots().back().get());
                 RegisterShaderUserVarIndex(
                     context.scene.get(), spMesh->Material(), wpmat, wpEffShaderInfo);
                 auto add_puppet_mask_materials = [&]() -> bool {
@@ -2091,7 +2139,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                             }
                             LoadConstvalue(mask_material, mask_wpmat, mask_shaderInfo);
                             spMesh->AddMaterial(std::move(mask_material));
-                            track_image_color_material(spMesh->MaterialSlots().back().get());
+                            track_image_property_material(spMesh->MaterialSlots().back().get());
 
                             wpscene::Material clip_wpmat        = wpmat;
                             clip_wpmat.combos["CLIPPINGTARGET"] = 1;
@@ -2115,7 +2163,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                             }
                             LoadConstvalue(clip_material, clip_wpmat, clip_shaderInfo);
                             spMesh->AddMaterial(std::move(clip_material));
-                            track_image_color_material(spMesh->MaterialSlots().back().get());
+                            track_image_property_material(spMesh->MaterialSlots().back().get());
                         }
                     }
                     return true;
@@ -2138,7 +2186,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             }
         }
 
-        if (! wpimgobj.fullscreen && ! isPassthrough &&
+        if (! wpimgobj.fullscreen && ! isPassthrough && ! wpimgobj.copybackground &&
             ! IsLayerCompositeShader(last_effect_shader)) {
             nlohmann::json    json;
             wpscene::Material passthrough_mat;
@@ -2175,7 +2223,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                     LoadConstvalue(finalMaterial, passthrough_mat, wpFinalShaderInfo);
                     auto spFinalMesh = std::make_shared<SceneMesh>();
                     spFinalMesh->AddMaterial(std::move(finalMaterial));
-                    track_image_color_material(spFinalMesh->MaterialSlots().back().get());
+                    track_image_property_material(spFinalMesh->MaterialSlots().back().get());
                     RegisterShaderUserVarIndex(context.scene.get(),
                                                spFinalMesh->Material(),
                                                passthrough_mat,
@@ -2194,7 +2242,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     WireFieldScripts(context, spImgNode, wpimgobj.field_bindings);
     if (! wpimgobj.color_user_key.empty()) {
         context.scene->image_color_user_index[wpimgobj.color_user_key].push_back(
-            { spImgNode.as_ptr(), std::move(image_color_materials) });
+            { spImgNode.as_ptr(), image_property_materials });
+    }
+    if (! wpimgobj.alpha_user_key.empty()) {
+        context.scene->image_alpha_user_index[wpimgobj.alpha_user_key].push_back(
+            { spImgNode.as_ptr(), image_property_materials });
     }
     context.node_id_map[wpimgobj.id] = {
         wpimgobj.parent,
@@ -2265,8 +2317,13 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
                                                                 Vector3f(wppartobj.angles.data()),
                                                                 wppartobj.name));
         auto& spNode = *spNodeOpt;
-        if (! wppartobj.visible_user_key.empty())
-            spNode->SetVisibleUserKey(wppartobj.visible_user_key);
+        spNode->ID() = wppartobj.id;
+        if (! wppartobj.visible) {
+            spNode->SetVisible(false);
+            context.scene->elidable_layer_ids.insert(wppartobj.id);
+        }
+        if (! wppartobj.visible_user.empty())
+            spNode->SetVisibleUserBinding(ToSceneUserVisibilityBinding(wppartobj.visible_user));
     }
     auto& spNode = *spNodeOpt;
 
@@ -2345,7 +2402,9 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         shaderInfo.combos["TRAILSUBDIVISION"] = std::to_string(subdiv);
     }
 
-    if (! particle_obj.flags[wpscene::Particle::FlagEnum::spritenoframeblending]) {
+    auto animationmode = ToAnimMode(particle_obj.animationmode);
+    if (animationmode == ParticleAnimationMode::SEQUENCE &&
+        ! particle_obj.flags[wpscene::Particle::FlagEnum::spritenoframeblending]) {
         shaderInfo.combos["SPRITESHEETBLEND"] = "1";
     }
 
@@ -2371,7 +2430,6 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
     LoadConstvalue(material, particle_obj.material, shaderInfo);
     auto  spMesh             = std::make_shared<SceneMesh>(true);
     auto& mesh               = *spMesh;
-    auto  animationmode      = ToAnimMode(particle_obj.animationmode);
     auto  sequencemultiplier = particle_obj.sequencemultiplier;
     bool  hasSprite          = material.hasSprite;
     (void)hasSprite;
@@ -2422,7 +2480,9 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
                 return;
             }
             switch (animationmode) {
-            case ParticleAnimationMode::RANDOMONE: lifetime = std::floor(p.init.lifetime); break;
+            case ParticleAnimationMode::RANDOMONE:
+                lifetime = std::clamp(p.random, 0.0f, std::nextafter(1.0f, 0.0f));
+                break;
             case ParticleAnimationMode::SEQUENCE:
                 lifetime = (1.0f - (p.lifetime / p.init.lifetime)) * sequencemultiplier;
                 break;
@@ -2430,7 +2490,8 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         },
         follow_anchor,
         trail_length,
-        static_cast<double>(particle_obj.starttime));
+        static_cast<double>(particle_obj.starttime),
+        particle_obj.flags[wpscene::Particle::FlagEnum::wordspace]);
 
     particleSub->SetOwnerNode(spNode.as_ptr());
     LoadEmitter(*particleSub,
@@ -2492,7 +2553,8 @@ void ParseSoundObj(ParseContext& context, wpscene::SoundObject& obj,
                                                   obj.name);
     node->ID() = obj.id;
     if (! obj.visible) node->SetVisible(false);
-    if (! obj.visible_user_key.empty()) node->SetVisibleUserKey(obj.visible_user_key);
+    if (! obj.visible_user.empty())
+        node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
 
     auto control = SoundAssetCompiler::Parse(obj, *context.vfs, sm, context.scene.get());
     node->SetSoundControl(control);
@@ -2538,8 +2600,8 @@ void ParseLightObj(ParseContext& context, wpscene::LightObject& light_obj) {
     auto& light = *(context.scene->lights.back());
     light.setNode(node.as_ptr());
     light.setRuntimeVisible(light_obj.visible);
-    if (! light_obj.visible_user_key.empty()) {
-        light.setVisibleUserKey(light_obj.visible_user_key);
+    if (! light_obj.visible_user.empty()) {
+        light.setVisibleUserBinding(ToSceneUserVisibilityBinding(light_obj.visible_user));
     }
 
     context.node_id_map[light_obj.id] = { light_obj.parent, rstd::Some(node.clone()) };
@@ -2559,8 +2621,13 @@ void ParseModelObj(ParseContext& context, wpscene::ModelObject& model_obj) {
                                                   Vector3f(model_obj.angles.data()),
                                                   model_obj.name);
     node->ID() = model_obj.id;
+    if (! model_obj.visible) {
+        node->SetVisible(false);
+        context.scene->elidable_layer_ids.insert(model_obj.id);
+    }
     MarkHiddenLinkSource(context, model_obj.id);
-    if (! model_obj.visible_user_key.empty()) node->SetVisibleUserKey(model_obj.visible_user_key);
+    if (! model_obj.visible_user.empty())
+        node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(model_obj.visible_user));
 
     auto mesh = std::make_shared<SceneMesh>();
 
@@ -2665,7 +2732,10 @@ TextRenderImageParser& EnsureTextImageParser(Scene& scene) {
 }
 
 void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
-    if (! obj.visible) return;
+    if (! obj.visible && obj.visible_user.empty()) return;
+    if (! obj.visible) {
+        context.scene->elidable_layer_ids.insert(obj.id);
+    }
     MarkHiddenLinkSource(context, obj.id);
 
     // --- determine initial text + whether a script binding will rewrite it
@@ -2673,10 +2743,27 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     bool has_text_script = (text_binding_it != obj.field_bindings.scripts.end());
     // Scripts can also drive `text` indirectly: a script attached to any
     // other field (commonly `visible`) writes `thisLayer.text = "..."` from
-    // its update() side-effect (e.g. workshop 2283810443's clock). Treat
-    // those layers as scripted-text for mesh sizing + setter registration.
-    bool has_indirect_text_script = ! has_text_script && ! obj.field_bindings.scripts.empty();
-    bool wants_dynamic_text       = has_text_script || has_indirect_text_script;
+    // its update() side-effect (e.g. workshop 2283810443's clock). Transform
+    // scripts alone should not force large dynamic text RTs.
+    bool has_indirect_text_script = false;
+    if (! has_text_script) {
+        for (const auto& [_, sb] : obj.field_bindings.scripts) {
+            if (sb.source.find(".text") != std::string::npos ||
+                sb.source.find("[\"text\"]") != std::string::npos ||
+                sb.source.find("['text']") != std::string::npos) {
+                has_indirect_text_script = true;
+                break;
+            }
+        }
+    }
+    bool wants_dynamic_text = has_text_script || has_indirect_text_script;
+    bool has_text_effect    = false;
+    for (const auto& effect : obj.effects) {
+        if (effect.visible || ! effect.visible_user.empty()) {
+            has_text_effect = true;
+            break;
+        }
+    }
 
     std::string s_text;
     if (obj.text.is_string()) {
@@ -2792,8 +2879,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         const auto& fm  = face->Metrics();
         const float adv = std::max(1.0f, static_cast<float>(fm.pixel_size) * 0.25f);
         const float lh = fm.line_height > 1.0f ? fm.line_height : static_cast<float>(fm.pixel_size);
-        const float rt_w = std::min<float>(static_cast<float>(context.scene->ortho[0]), 1024.0f);
-        const float rt_h = std::min<float>(static_cast<float>(context.scene->ortho[1]), 256.0f);
+        const float obj_w = obj.size[0] > 0.0f ? obj.size[0] : 1024.0f;
+        const float obj_h = obj.size[1] > 0.0f ? obj.size[1] : 256.0f;
+        const float rt_w  = std::max(1024.0f, obj_w * 3.0f);
+        const float rt_h  = std::max(256.0f, obj_h * 2.0f);
         const std::size_t cols   = static_cast<std::size_t>(std::ceil(rt_w / adv));
         const std::size_t rows   = static_cast<std::size_t>(std::ceil(rt_h / std::max(1.0f, lh)));
         const std::size_t rt_cap = std::clamp<std::size_t>(cols * rows, 64, 16384);
@@ -2852,8 +2941,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto layouter = std::make_shared<text::TextLayouter>(face, sp_mesh, style, peak_quads);
     layouter->SetText(s_text);
 
-    float text_w = layouter->TextWidth();
-    float text_h = layouter->TextHeight();
+    float text_w        = layouter->TextWidth();
+    float text_h        = layouter->TextHeight();
+    float text_source_w = layouter->SourceWidth();
+    float text_source_h = layouter->SourceHeight();
     if (text_w <= 0.0f || text_h <= 0.0f) {
         // Empty seed (scripted-only text). Fake a 1×1 bbox so SceneNode /
         // parallax setup still works; the runtime actuator scales the
@@ -2861,14 +2952,18 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         text_w = 1.0f;
         text_h = 1.0f;
     }
+    if (text_source_w <= 0.0f) text_source_w = text_w;
+    if (text_source_h <= 0.0f) text_source_h = text_h;
 
-    auto sp_node            = rstd::sync::Arc<SceneNode>::make(Vector3f(obj.origin.data()),
-                                                               Vector3f(obj.scale.data()),
-                                                               Vector3f(obj.angles.data()),
-                                                               obj.name);
-    sp_node->ID()           = obj.id;
-    const float text_bbox_w = text_w + 2.0f * style.padding;
-    const float text_bbox_h = text_h + 2.0f * style.padding;
+    auto sp_node                   = rstd::sync::Arc<SceneNode>::make(Vector3f(obj.origin.data()),
+                                                                      Vector3f(obj.scale.data()),
+                                                                      Vector3f(obj.angles.data()),
+                                                                      obj.name);
+    sp_node->ID()                  = obj.id;
+    const float text_bbox_w        = text_w + 2.0f * style.padding;
+    const float text_bbox_h        = text_h + 2.0f * style.padding;
+    const float text_source_bbox_w = text_source_w + 2.0f * style.padding;
+    const float text_source_bbox_h = text_source_h + 2.0f * style.padding;
     sp_node->SetSize({ text_bbox_w, text_bbox_h });
     sp_node->AddMesh(sp_mesh);
 
@@ -2911,18 +3006,28 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     });
 
     auto compose_node = rstd::sync::Arc<SceneNode>::make();
-    // Layer RT must be a worst-case sandbox: runtime SetText may expand the
-    // glyph bbox well past the seed (clock/date/locale strings). Bound by
-    // canvas so we don't waste VRAM, and floor at the parse-time bbox so a
-    // narrow runtime string still fits without clipping artifacts.
-    const float layer_max_w = std::min<float>(context.scene->ortho[0], 1024.0f);
-    const float layer_max_h = std::min<float>(context.scene->ortho[1], 256.0f);
-    const i32   layer_w     = std::max<i32>(1, (i32)std::max(text_bbox_w, layer_max_w));
-    const i32   layer_h     = std::max<i32>(1, (i32)std::max(text_bbox_h, layer_max_h));
+    // Layer RT must cover the source glyph bounds, not the main canvas.
+    // Clock/date scripts often render a large text source and shrink it with
+    // the scene transform when composing into the world.
+    const float object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
+    const float object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
+    const float dynamic_w_budget =
+        std::max({ text_source_bbox_w, text_bbox_w, object_w * 3.0f, 1024.0f });
+    const float dynamic_h_budget =
+        std::max({ text_source_bbox_h, text_bbox_h, object_h * 2.0f, 256.0f });
+    const float layer_max_w =
+        has_text_effect ? object_w : (wants_dynamic_text ? dynamic_w_budget : text_source_bbox_w);
+    const float layer_max_h =
+        has_text_effect ? object_h : (wants_dynamic_text ? dynamic_h_budget : text_source_bbox_h);
+    const i32 layer_w = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_w, layer_max_w)));
+    const i32 layer_h = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_h, layer_max_h)));
     {
         auto&             scene   = *context.scene;
         const std::string addr    = getAddr(sp_node.as_ptr());
         const std::string ppong_a = std::string(SR_EFFECT_PPONG_PREFIX_A) + addr;
+        const std::string ppong_b = std::string(SR_EFFECT_PPONG_PREFIX_B) + addr;
+        const std::string effect_final =
+            std::string(SR_EFFECT_PPONG_PREFIX_A) + "text_final_" + addr;
 
         // Per-layer ortho camera. effect_camera_node sits at origin so the
         // view matrix is identity; ortho extents = bbox so glyph pixel
@@ -2936,71 +3041,253 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             .allowReuse  = true,
             .force_clear = true,
         };
+        if (has_text_effect) scene.renderTargets[ppong_b] = scene.renderTargets.at(ppong_a);
+        if (has_text_effect) scene.renderTargets[effect_final] = scene.renderTargets.at(ppong_a);
 
-        // Empty SceneImageEffectLayer so graph assembly
-        // routes sp_node's output to ppong_a (FirstTarget()) without
-        // emitting any extra effect passes (m_effects is empty).
-        auto layer = std::make_shared<SceneImageEffectLayer>(
-            sp_node.as_ptr(), (float)layer_w, (float)layer_h, ppong_a, ppong_a);
+        compose_node->CopyTrans(*sp_node.as_ptr());
+        compose_node->ID() = obj.id;
+        compose_node->SetSize(
+            { has_text_effect ? object_w : text_bbox_w, has_text_effect ? object_h : text_bbox_h });
+
+        // With text effects, the effect layer hangs off compose_node (the
+        // world-space composite quad) so effect passes see the composited
+        // glyphs; without effects it hangs off sp_node so graph assembly
+        // routes sp_node's output straight to ppong_a (FirstTarget()) with
+        // no extra passes.
+        auto layer = std::make_shared<SceneImageEffectLayer>(has_text_effect ? compose_node.as_ptr()
+                                                                             : sp_node.as_ptr(),
+                                                             (float)layer_w,
+                                                             (float)layer_h,
+                                                             ppong_a,
+                                                             has_text_effect ? ppong_b : ppong_a);
         scene.cameras.at(addr)->AttatchImgEffect(layer);
+
+        SceneUniformNodeData compose_sv;
+        compose_sv.parallaxDepth           = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
+        compose_sv.propagatedParallaxDepth = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
+
+        // genericimage3 multiplies samples by g_Color4 / g_UserAlpha /
+        // g_Brightness — they default to zero when uninitialised, blacking
+        // out the composite. Seed neutral values so the layer RT passes
+        // through; per-text color/alpha lives in the glyph vertex color
+        // attribute on sp_node already. The same neutral base is reused by
+        // every effect-pass material below.
+        ShaderValueMap effect_base  = context.global_base_uniforms;
+        effect_base["g_Color4"]     = std::array<float, 4> { 1.0f, 1.0f, 1.0f, 1.0f };
+        effect_base["g_Color"]      = std::array<float, 3> { 1.0f, 1.0f, 1.0f };
+        effect_base["g_Alpha"]      = 1.0f;
+        effect_base["g_UserAlpha"]  = 1.0f;
+        effect_base["g_Brightness"] = 1.0f;
+
+        struct LoadedTextMaterial {
+            wpscene::Material    source;
+            SceneMaterial        material;
+            SceneUniformNodeData sv;
+            WPShaderInfo         shader_info;
+        };
+        auto load_passthrough_material =
+            [&](SceneNode* owner, std::string_view input) -> std::optional<LoadedTextMaterial> {
+            nlohmann::json pt_json;
+            if (! sr::ParseJson(fs::GetFileContent(
+                                     *context.vfs, "/assets/materials/util/effectpassthrough.json"),
+                                 pt_json)) {
+                rstd_error("text '{}': parse effectpassthrough.json failed", obj.name);
+                return std::nullopt;
+            }
+            wpscene::Material pt_mat;
+            if (! pt_mat.FromJson(pt_json)) {
+                rstd_error("text '{}': Material::FromJson failed", obj.name);
+                return std::nullopt;
+            }
+            if (pt_mat.textures.empty())
+                pt_mat.textures.push_back(std::string(input));
+            else
+                pt_mat.textures[0] = std::string(input);
+
+            SceneMaterial        mat;
+            SceneUniformNodeData sv;
+            WPShaderInfo         si;
+            si.baseConstSvs = effect_base;
+            if (! LoadMaterial(*context.vfs, pt_mat, &scene, owner, &mat, &sv, &si)) {
+                rstd_error("text '{}': compose LoadMaterial failed", obj.name);
+                return std::nullopt;
+            }
+            LoadConstvalue(mat, pt_mat, si);
+            mat.blenmode = BlendMode::Translucent;
+            return LoadedTextMaterial {
+                .source      = std::move(pt_mat),
+                .material    = std::move(mat),
+                .sv          = std::move(sv),
+                .shader_info = std::move(si),
+            };
+        };
+
+        if (has_text_effect) {
+            // Effects compose in LAYER order: each effect reads ppong_a
+            // (the running composite) and writes through its materials into
+            // ppong_b / per-pass targets. The layer's final target
+            // (effect_final) receives the last effect's output, which the
+            // compose quad then samples into the world.
+            SceneMaterial final_state;
+            final_state.blenmode    = BlendMode::Normal;
+            final_state.depth_test  = false;
+            final_state.depth_write = false;
+            layer->SetFullscreen(true);
+            layer->SetFinalTarget(effect_final);
+            layer->SetFinalMaterialState(final_state);
+
+            for (const auto& wpeffobj : obj.effects) {
+                if (! wpeffobj.visible && wpeffobj.visible_user.empty()) continue;
+
+                auto effect             = std::make_shared<SceneImageEffect>();
+                effect->runtime_visible = wpeffobj.visible;
+                if (! wpeffobj.visible_user.empty()) {
+                    effect->visible_user_binding =
+                        ToSceneUserVisibilityBinding(wpeffobj.visible_user);
+                }
+
+                const std::string                            inRT { ppong_a };
+                std::unordered_map<std::string, std::string> fboMap;
+                fboMap["previous"] = inRT;
+
+                const std::string effaddr = getAddr(layer.get());
+                for (const auto& wpfbo : wpeffobj.fbos) {
+                    const std::string rtname =
+                        sstart_with(wpfbo.name, WE_SPEC_PREFIX)
+                            ? wpfbo.name + "_" + effaddr
+                            : std::string(WE_SPEC_PREFIX) + wpfbo.name + "_" + effaddr;
+                    auto fbo_size = [&]() -> std::array<uint16_t, 2> {
+                        if (wpfbo.fit > 0) {
+                            const float max_size = std::max(object_w, object_h);
+                            if (max_size > 0.0f) {
+                                const float fit_scale = static_cast<float>(wpfbo.fit) / max_size;
+                                return {
+                                    static_cast<uint16_t>(
+                                        std::max(1.0f, std::round(object_w * fit_scale))),
+                                    static_cast<uint16_t>(
+                                        std::max(1.0f, std::round(object_h * fit_scale))),
+                                };
+                            }
+                        }
+                        return {
+                            static_cast<uint16_t>(
+                                std::max(1.0f, object_w / static_cast<float>(wpfbo.scale))),
+                            static_cast<uint16_t>(
+                                std::max(1.0f, object_h / static_cast<float>(wpfbo.scale))),
+                        };
+                    }();
+                    scene.renderTargets[rtname] = { .width      = fbo_size[0],
+                                                    .height     = fbo_size[1],
+                                                    .allowReuse = true };
+                    fboMap[wpfbo.name]          = rtname;
+                }
+
+                for (const auto& cmd : wpeffobj.commands) {
+                    if (cmd.command != "copy") {
+                        rstd_error("Unknown effect command: {}", cmd.command);
+                        continue;
+                    }
+                    if (fboMap.count(cmd.target) + fboMap.count(cmd.source) < 2) {
+                        rstd_error(
+                            "Unknown effect command dst or src: {} {}", cmd.target, cmd.source);
+                        continue;
+                    }
+                    effect->commands.push_back({ .cmd      = SceneImageEffect::CmdType::Copy,
+                                                 .dst      = fboMap[cmd.target],
+                                                 .src      = fboMap[cmd.source],
+                                                 .afterpos = cmd.afterpos });
+                }
+
+                bool effect_ok = true;
+                for (usize i_mat = 0; i_mat < wpeffobj.materials.size(); ++i_mat) {
+                    wpscene::Material                wpmat = wpeffobj.materials.at(i_mat);
+                    std::string                      matOutRT { SR_EFFECT_PPONG_PREFIX_B };
+                    std::optional<wpscene::Material> user_texture_fallback;
+                    if (wpeffobj.passes.size() > i_mat) {
+                        const auto& pass = wpeffobj.passes.at(i_mat);
+                        wpmat.MergePass(pass);
+                        ApplyTextureBinds(wpmat, std::span(pass.bind), fboMap);
+                        user_texture_fallback = wpmat;
+                        ApplyUserTextureBindings(context, wpmat);
+                        if (! pass.target.empty()) {
+                            if (fboMap.count(pass.target) == 0)
+                                rstd_error("fbo {} not found", pass.target);
+                            else
+                                matOutRT = fboMap.at(pass.target);
+                        }
+                    }
+                    for (auto& tex : wpmat.textures) {
+                        if (ParseImageLayerCompositeId(tex) == static_cast<std::uint32_t>(obj.id))
+                            tex = ppong_a;
+                    }
+                    if (wpmat.textures.empty()) wpmat.textures.resize(1);
+                    if (wpmat.textures.at(0).empty()) wpmat.textures[0] = inRT;
+
+                    auto         effect_node = rstd::sync::Arc<SceneNode>::make();
+                    WPShaderInfo shader_info;
+                    shader_info.baseConstSvs = effect_base;
+                    shader_info.baseConstSvs["g_EffectTextureProjectionMatrix"] =
+                        ShaderValue::fromMatrix(Eigen::Matrix4f::Identity());
+                    shader_info.baseConstSvs["g_EffectTextureProjectionMatrixInverse"] =
+                        ShaderValue::fromMatrix(Eigen::Matrix4f::Identity());
+
+                    SceneMaterial        mat;
+                    SceneUniformNodeData sv;
+                    sv.propagate_parallax_to_children = true;
+                    sv.propagatedParallaxDepth        = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
+                    sv.parallaxDepth                  = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
+                    sv.effect_projection_node         = compose_node.as_ptr();
+                    sv.effect_projection_size         = { object_w, object_h };
+                    if (! LoadMaterial(*context.vfs,
+                                       wpmat,
+                                       &scene,
+                                       effect_node.as_ptr(),
+                                       &mat,
+                                       &sv,
+                                       &shader_info)) {
+                        effect_ok = false;
+                        break;
+                    }
+                    LoadConstvalue(mat, wpmat, shader_info);
+
+                    auto mesh = std::make_shared<SceneMesh>();
+                    mesh->AddMaterial(std::move(mat));
+                    RegisterShaderUserVarIndex(&scene, mesh->Material(), wpmat, shader_info);
+                    // NOTE: upstream calls RegisterMaterialUserTextureIndex
+                    // here with user_texture_fallback; the port lacks
+                    // SceneResourceIndex so that registration is skipped.
+                    (void)user_texture_fallback;
+                    effect_node->AddMesh(mesh);
+                    context.shader_updater->SetNodeData(effect_node.as_ptr(), sv);
+                    effect->nodes.push_back(SceneImageEffectNode { matOutRT, effect_node.clone() });
+                }
+
+                if (effect_ok)
+                    layer->AddEffect(effect);
+                else
+                    rstd_error("effect '{}' failed to load", wpeffobj.name);
+            }
+        }
 
         // Compose quad — sized to the visible text bbox in world space, with
         // UVs subsampling just the central portion of ppong_a where the
         // glyphs actually live (the rest of the RT is transparent slack).
         // Scripted texts mutate text_w/text_h each frame, so the mesh is
-        // dynamic and rebuilt by the actuator below.
-        compose_node->CopyTrans(*sp_node.as_ptr());
-        compose_node->ID() = obj.id;
-        compose_node->SetSize({ text_bbox_w, text_bbox_h });
+        // dynamic and rebuilt by the actuator below. With effects, the
+        // compose quad samples effect_final (the last effect's output)
+        // instead of ppong_a.
         auto compose_mesh = std::make_shared<SceneMesh>(/*dynamic=*/wants_dynamic_text);
-        GenCardMesh(*compose_mesh, { (uint16_t)layer_w, (uint16_t)layer_h });
-
-        nlohmann::json pt_json;
-        if (! sr::ParseJson(
-                fs::GetFileContent(*context.vfs, "/assets/materials/util/effectpassthrough.json"),
-                pt_json)) {
-            rstd_error("text '{}': parse effectpassthrough.json failed", obj.name);
-            return;
-        }
-        wpscene::Material pt_mat;
-        if (! pt_mat.FromJson(pt_json)) {
-            rstd_error("text '{}': Material::FromJson failed", obj.name);
-            return;
-        }
-        if (pt_mat.textures.empty())
-            pt_mat.textures.push_back(ppong_a);
-        else
-            pt_mat.textures[0] = ppong_a;
-
-        SceneMaterial        compose_mat;
-        SceneUniformNodeData compose_sv;
-        WPShaderInfo         compose_si;
-        compose_si.baseConstSvs = context.global_base_uniforms;
-        // genericimage3 multiplies samples by g_Color4 / g_UserAlpha /
-        // g_Brightness — they default to zero when uninitialised, blacking
-        // out the composite. Seed neutral values so the layer RT passes
-        // through; per-text color/alpha lives in the glyph vertex color
-        // attribute on sp_node already.
-        compose_si.baseConstSvs["g_Color4"]     = std::array<float, 4> { 1.0f, 1.0f, 1.0f, 1.0f };
-        compose_si.baseConstSvs["g_UserAlpha"]  = 1.0f;
-        compose_si.baseConstSvs["g_Brightness"] = 1.0f;
-        if (! LoadMaterial(*context.vfs,
-                           pt_mat,
-                           &scene,
-                           compose_node.as_ptr(),
-                           &compose_mat,
-                           &compose_sv,
-                           &compose_si)) {
-            rstd_error("text '{}': compose LoadMaterial failed", obj.name);
-            return;
-        }
-        LoadConstvalue(compose_mat, pt_mat, compose_si);
-        compose_mat.blenmode = BlendMode::Translucent;
-        compose_mesh->AddMaterial(std::move(compose_mat));
-        RegisterShaderUserVarIndex(&scene, compose_mesh->Material(), pt_mat, compose_si);
-        compose_node->AddMesh(compose_mesh);
+        GenCardMesh(*compose_mesh, { static_cast<float>(layer_w), static_cast<float>(layer_h) });
+        auto loaded = load_passthrough_material(compose_node.as_ptr(),
+                                                has_text_effect ? effect_final : ppong_a);
+        if (! loaded.has_value()) return;
+        compose_sv                         = std::move(loaded->sv);
         compose_sv.parallaxDepth           = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
         compose_sv.propagatedParallaxDepth = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
+        compose_mesh->AddMaterial(std::move(loaded->material));
+        RegisterShaderUserVarIndex(
+            &scene, compose_mesh->Material(), loaded->source, loaded->shader_info);
+        compose_node->AddMesh(compose_mesh);
         context.shader_updater->SetNodeData(compose_node.as_ptr(), compose_sv);
 
         // Move sp_node into layer space — identity transform so the glyph
@@ -3031,36 +3318,50 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // bbox; UVs subsample the central text region of ppong_a (since the
     // ortho is layer-sized but glyphs occupy only text-bbox in the
     // middle).
-    auto rebuild_compose =
-        [compose_ptr, anchor_state, apply_text_anchor, layer_w, layer_h](float tw, float th) {
-            if (tw <= 0.0f) tw = 1.0f;
-            if (th <= 0.0f) th = 1.0f;
-            anchor_state->width  = tw;
-            anchor_state->height = th;
-            compose_ptr->SetSize({ tw, th });
-            apply_text_anchor();
-            const float                 hx = tw * 0.5f;
-            const float                 hy = th * 0.5f;
-            const std::array<float, 12> pos {
-                -hx, -hy, 0.0f, -hx, +hy, 0.0f, +hx, -hy, 0.0f, +hx, +hy, 0.0f,
-            };
-            const float                u_half = 0.5f * std::min(1.0f, tw / float(layer_w));
-            const float                v_half = 0.5f * std::min(1.0f, th / float(layer_h));
-            const float                u_l    = 0.5f - u_half;
-            const float                u_r    = 0.5f + u_half;
-            const float                v_t    = 0.5f - v_half;
-            const float                v_b    = 0.5f + v_half;
-            const std::array<float, 8> uv {
-                u_l, v_b, u_l, v_t, u_r, v_b, u_r, v_t,
-            };
-            auto* mesh = compose_ptr->Mesh();
-            if (mesh == nullptr) return;
-            auto& v = mesh->GetVertexArray(0);
-            v.SetVertex(WE_IN_POSITION, pos);
-            v.SetVertex(WE_IN_TEXCOORD, uv);
-            mesh->SetDirty();
+    auto rebuild_compose = [compose_ptr,
+                            anchor_state,
+                            apply_text_anchor,
+                            layer_w,
+                            layer_h,
+                            has_text_effect,
+                            object_w,
+                            object_h](float tw, float th, float source_w, float source_h) {
+        if (tw <= 0.0f) tw = 1.0f;
+        if (th <= 0.0f) th = 1.0f;
+        if (source_w <= 0.0f) source_w = tw;
+        if (source_h <= 0.0f) source_h = th;
+        if (has_text_effect) {
+            tw       = object_w;
+            th       = object_h;
+            source_w = object_w;
+            source_h = object_h;
+        }
+        anchor_state->width  = tw;
+        anchor_state->height = th;
+        compose_ptr->SetSize({ tw, th });
+        apply_text_anchor();
+        const float                 hx = tw * 0.5f;
+        const float                 hy = th * 0.5f;
+        const std::array<float, 12> pos {
+            -hx, -hy, 0.0f, -hx, +hy, 0.0f, +hx, -hy, 0.0f, +hx, +hy, 0.0f,
         };
-    rebuild_compose(text_w, text_h);
+        const float                u_half = 0.5f * std::min(1.0f, tw / float(layer_w));
+        const float                v_half = 0.5f * std::min(1.0f, th / float(layer_h));
+        const float                u_l    = 0.5f - u_half;
+        const float                u_r    = 0.5f + u_half;
+        const float                v_t    = 0.5f - v_half;
+        const float                v_b    = 0.5f + v_half;
+        const std::array<float, 8> uv {
+            u_l, v_b, u_l, v_t, u_r, v_b, u_r, v_t,
+        };
+        auto* mesh = compose_ptr->Mesh();
+        if (mesh == nullptr) return;
+        auto& v = mesh->GetVertexArray(0);
+        v.SetVertex(WE_IN_POSITION, pos);
+        v.SetVertex(WE_IN_TEXCOORD, uv);
+        mesh->SetDirty();
+    };
+    rebuild_compose(text_w, text_h, text_source_w, text_source_h);
 
     auto apply_text_origin = [anchor_state, apply_text_anchor](const script::ScriptValue& value) {
         Vector3f current = anchor_state->origin;
@@ -3080,7 +3381,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto set_halign = [layouter, rebuild_compose, anchor_state](std::string_view align) {
         anchor_state->horizontal = std::string(align);
         layouter->SetHorizontalAlign(align);
-        rebuild_compose(layouter->TextWidth(), layouter->TextHeight());
+        rebuild_compose(layouter->TextWidth(),
+                        layouter->TextHeight(),
+                        layouter->SourceWidth(),
+                        layouter->SourceHeight());
     };
     auto set_valign = [anchor_state, apply_text_anchor](std::string_view align) {
         anchor_state->vertical = std::string(align);
@@ -3099,7 +3403,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // composite quad in world space, not the layer-space glyph node.
     WireFieldScripts(
         context, compose_node, obj.field_bindings, apply_text_origin, apply_text_scale);
-    if (! obj.visible_user_key.empty()) compose_node->SetVisibleUserKey(obj.visible_user_key);
+    if (! obj.visible) compose_node->SetVisible(false);
+    if (! obj.visible_user.empty())
+        compose_node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(obj.visible_user));
 
     // --- text-content actuator. Captures the layouter + a closure that
     // re-rasterises new codepoints, lays them out, and rebuilds the
@@ -3108,7 +3414,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto set_text = [layouter, face, rebuild_compose](std::string_view s) {
         face->Populate(text::DecodeUtf8(s));
         layouter->SetText(s);
-        rebuild_compose(layouter->TextWidth(), layouter->TextHeight());
+        rebuild_compose(layouter->TextWidth(),
+                        layouter->TextHeight(),
+                        layouter->SourceWidth(),
+                        layouter->SourceHeight());
     };
     if (has_text_script) {
         const auto& sb = text_binding_it->second;
@@ -3120,7 +3429,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                                                        script::FieldKind::String,
                                                        sb.properties,
                                                        sb.initial_value,
-                                                       sp_node.as_ptr());
+                                                       compose_node.as_ptr());
         if (fs) {
             ss.AddActuator({
                 fs,
@@ -3180,49 +3489,18 @@ UserPropertyValue(const std::unordered_map<std::string, nlohmann::json>* user_pr
     if (user_props == nullptr || key.empty()) return nullptr;
     auto it = user_props->find(std::string(key));
     if (it == user_props->end()) return nullptr;
-    if (it->second.is_object() && it->second.contains("value")) return &it->second.at("value");
-    return &it->second;
-}
-
-std::optional<std::string> JsonScalarString(const nlohmann::json& v) {
-    if (v.is_string()) return v.get<std::string>();
-    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
-    if (v.is_number_integer()) return std::to_string(v.get<std::int64_t>());
-    if (v.is_number_unsigned()) return std::to_string(v.get<std::uint64_t>());
-    if (v.is_number_float()) {
-        std::ostringstream os;
-        os << v.get<double>();
-        return os.str();
-    }
-    return std::nullopt;
-}
-
-bool JsonScalarEquals(const nlohmann::json& a, const nlohmann::json& b) {
-    if (a == b) return true;
-    auto as = JsonScalarString(a);
-    auto bs = JsonScalarString(b);
-    if (! as || ! bs) return false;
-    if (*as == *bs) return true;
-    if (a.is_boolean() && b.is_string()) {
-        const auto s = b.get<std::string>();
-        return (a.get<bool>() && s == "1") || (! a.get<bool>() && s == "0");
-    }
-    if (a.is_string() && b.is_boolean()) {
-        const auto s = a.get<std::string>();
-        return (b.get<bool>() && s == "1") || (! b.get<bool>() && s == "0");
-    }
-    return false;
+    return &SceneUserPropertyPayload(it->second);
 }
 
 bool ResolveVisibleUserBinding(bool& visible, const wpscene::VisibleUserBinding& binding,
                                const std::unordered_map<std::string, nlohmann::json>* user_props) {
     if (binding.empty()) return false;
     const nlohmann::json* value = UserPropertyValue(user_props, binding.name);
-    if (binding.has_condition) {
-        if (value != nullptr) visible = JsonScalarEquals(*value, binding.condition);
-        return true;
+    if (value != nullptr) {
+        if (auto resolved =
+                ResolveSceneUserVisibilityBinding(ToSceneUserVisibilityBinding(binding), *value))
+            visible = *resolved;
     }
-    if (value != nullptr && value->is_boolean()) visible = value->get<bool>();
     return true;
 }
 
@@ -3237,9 +3515,8 @@ ResolveObjectVisibility(const nlohmann::json&                                  j
                         const std::unordered_map<std::string, nlohmann::json>* user_props) {
     ObjectVisibilityInfo info;
     sr::GetJsonValue(json_obj, "parent", info.parent, false);
-    sr::GetJsonValue(json_obj, "visible", info.visible, false);
     wpscene::VisibleUserBinding binding;
-    wpscene::ReadVisibleUserBinding(json_obj, binding);
+    wpscene::ReadVisibleProperty(json_obj, info.visible, binding);
     info.user_bound = ! binding.empty();
     ResolveVisibleUserBinding(info.visible, binding, user_props);
     return info;
@@ -3300,15 +3577,26 @@ void AddSceneObject(std::vector<SceneObjectVar>& objs, const nlohmann::json& jso
         return;
     }
     ResolveVisibleUserBinding(scene_obj.visible, scene_obj.visible_user, user_props);
+    if constexpr (std::is_same_v<T, wpscene::ImageObject>) {
+        for (auto& effect : scene_obj.effects)
+            ResolveVisibleUserBinding(effect.visible, effect.visible_user, user_props);
+    }
     if (force_invisible) scene_obj.visible = false;
     const bool preserve_hidden_link_source =
         ! scene_obj.visible && linked_source_ids != nullptr &&
         linked_source_ids->count(static_cast<std::int32_t>(scene_obj.id)) != 0;
+    const bool preserve_hidden_user_bound = ! scene_obj.visible && ! scene_obj.visible_user.empty();
+    const bool preserve_hidden_visible_script =
+        ! scene_obj.visible && scene_obj.field_bindings.scripts.count("visible") != 0;
     // Image objects keep going even when visible=false: another layer's
     // material may reference them via `_rt_imageLayerComposite_<id>`. The
     // render-graph builder later decides whether to actually emit passes.
     if constexpr (! std::is_same_v<T, wpscene::ImageObject>) {
-        if (! scene_obj.visible && ! preserve_hidden_link_source) return;
+        constexpr bool preserve_user_visibility = ! std::is_same_v<T, wpscene::SoundObject>;
+        if (! scene_obj.visible && ! preserve_hidden_link_source &&
+            ! (preserve_user_visibility &&
+               (preserve_hidden_user_bound || preserve_hidden_visible_script)))
+            return;
         if (preserve_hidden_link_source) scene_obj.visible = true;
     }
     objs.push_back(scene_obj);
@@ -3811,6 +4099,17 @@ std::shared_ptr<Scene> WallpaperSceneCompiler::Parse(std::string_view           
             auto node = rstd::sync::Arc<SceneNode>::make(
                 Vector3f(origin.data()), Vector3f(scale.data()), Vector3f(angles.data()), name);
             node->ID() = id;
+            std::array<float, 2> parallax_depth { 0.0f, 0.0f };
+            bool                 disable_propagation = false;
+            sr::GetJsonValue(o, "parallaxDepth", parallax_depth, false);
+            sr::GetJsonValue(o, "disablepropagation", disable_propagation, false);
+            if (parallax_depth[0] != 0.0f || parallax_depth[1] != 0.0f || disable_propagation) {
+                SceneUniformNodeData sv_data;
+                sv_data.propagate_parallax_to_children = ! disable_propagation;
+                sv_data.parallaxDepth                  = { parallax_depth[0], parallax_depth[1] };
+                sv_data.propagatedParallaxDepth        = { parallax_depth[0], parallax_depth[1] };
+                context.shader_updater->SetNodeData(node.as_ptr(), sv_data);
+            }
             auto vit   = visibility_info.find(id);
             if (vit != visibility_info.end()) {
                 bool visible = vit->second.visible &&
@@ -3819,7 +4118,8 @@ std::shared_ptr<Scene> WallpaperSceneCompiler::Parse(std::string_view           
             }
             wpscene::VisibleUserBinding visible_user;
             wpscene::ReadVisibleUserBinding(o, visible_user);
-            if (! visible_user.empty()) node->SetVisibleUserKey(visible_user.name);
+            if (! visible_user.empty())
+                node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(visible_user));
             wpscene::FieldBindings fb;
             wpscene::AbsorbAllFieldBindings(o, fb);
             WireFieldScripts(context, node, fb);

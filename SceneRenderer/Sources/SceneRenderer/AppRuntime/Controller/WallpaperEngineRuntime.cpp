@@ -26,6 +26,13 @@ using namespace sr;
 namespace sr
 {
 
+// TODO(4b41483): upstream SceneWallpaper reroutes the per-frame render path
+// through a RenderSceneSnapshot produced by Scene::RebuildResourceIndex, and
+// drives RenderProgram / render_items + ShaderReflectionCache through the
+// render thread. The port has no snapshot infrastructure, so the
+// pre-4b41483 sceneGraph-driven RenderDraw path is retained. Port the
+// snapshot plumbing together with SceneRenderPlanner + VulkanFrameEngine.
+
 // ---- Render-thread messages -------------------------------------------------
 
 struct RenderInit {
@@ -44,6 +51,9 @@ struct RenderSetUserProperty {
     std::string    key;
     nlohmann::json property;
 };
+struct RenderSetMediaStatus {
+    MediaStatus status;
+};
 struct RenderStop {
     bool stop;
 };
@@ -59,7 +69,8 @@ struct RenderSwapchainReady {
 // type sits in namespace std.
 struct RenderMsg {
     std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetSpeed,
-                 RenderSetUserProperty, RenderStop, RenderDraw, RenderSwapchainReady>
+                 RenderSetUserProperty, RenderSetMediaStatus, RenderStop, RenderDraw,
+                 RenderSwapchainReady>
         v;
 };
 
@@ -244,27 +255,6 @@ UserPropertyCoerceResult CoerceUserPropertyValue(const nlohmann::json& prop) {
     return r;
 }
 
-ShaderValue ShapeUserShaderValue(const SceneMaterial& material, const std::string& uniform_name,
-                                 const ShaderValue& value) {
-    if (value.size() != 1) return value;
-
-    size_t target_size = 0;
-    if (auto it = material.customShader.constValues.find(uniform_name);
-        it != material.customShader.constValues.end()) {
-        target_size = it->second.size();
-    }
-    if (target_size <= 1 && material.customShader.shader) {
-        if (auto it = material.customShader.shader->default_uniforms.find(uniform_name);
-            it != material.customShader.shader->default_uniforms.end()) {
-            target_size = it->second.size();
-        }
-    }
-    if (target_size <= 1 || target_size > 4) return value;
-
-    std::vector<float> shaped(target_size, value[0]);
-    return ShaderValue(std::span<const float>(shaped));
-}
-
 void ApplyUserPropertyToClear(Scene& scene, const std::string& key, const nlohmann::json& prop) {
     if (scene.clearColorUserKey.empty()) return;
     if (CanonicalUserPropertyKey(scene.clearColorUserKey) != key) return;
@@ -282,7 +272,9 @@ void ApplyUserPropertyToClear(Scene& scene, const std::string& key, const nlohma
 
 // Push a user-property value to every material whose shader declared a
 // `u_*` uniform with this material-key. Sets the per-material dirty flag so
-// CustomShaderPass picks the new value up next frame.
+// CustomShaderPass picks the new value up next frame. Routes through
+// SceneMaterial::SetShaderValue so an active value-animation on the same
+// uniform re-bases against the new user value (see TickMaterialShaderAnimations).
 void ApplyUserPropertyToShaders(Scene& scene, const std::string& key, const nlohmann::json& prop) {
     auto it = scene.shader_user_var_index.find(key);
     if (it == scene.shader_user_var_index.end()) return;
@@ -296,10 +288,27 @@ void ApplyUserPropertyToShaders(Scene& scene, const std::string& key, const nloh
     }
     for (auto& [material, uniform_name] : it->second) {
         if (! material) continue;
-        material->customShader.constValues[uniform_name] =
-            ShapeUserShaderValue(*material, uniform_name, coerced.value);
-        material->customShader.dirty = true;
+        material->SetShaderValue(uniform_name, coerced.value);
     }
+}
+
+float CurrentImagePropertyAlpha(SceneNode* node) {
+    if (! node) return 1.0f;
+    return node->IsAlphaOverridden() ? node->EffectiveAlpha() : node->BaseAlpha();
+}
+
+Eigen::Vector3f CurrentImagePropertyColor(SceneNode* node) {
+    if (! node) return { 1.0f, 1.0f, 1.0f };
+    return node->IsColorOverridden() ? node->Color() : node->BaseColor();
+}
+
+bool MaterialHasShaderUniform(const SceneMaterial& material, std::string_view uniform_name) {
+    const std::string name(uniform_name);
+    if (material.customShader.constValues.contains(name)) return true;
+    if (material.customShader.shader &&
+        material.customShader.shader->default_uniforms.contains(name))
+        return true;
+    return false;
 }
 
 void ApplyUserPropertyToImageColor(Scene& scene, const std::string& key,
@@ -314,12 +323,61 @@ void ApplyUserPropertyToImageColor(Scene& scene, const std::string& key,
     for (const auto& binding : it->second) {
         if (binding.node) binding.node->SetColor(color);
 
-        float                alpha = binding.node ? binding.node->BaseAlpha() : 1.0f;
+        std::array<float, 3> color3 { color.x(), color.y(), color.z() };
+        for (auto* material : binding.materials) {
+            if (! material) continue;
+            const bool  has_user_alpha = MaterialHasShaderUniform(*material, "g_UserAlpha");
+            const float alpha          = has_user_alpha && binding.node
+                                             ? binding.node->BaseAlpha()
+                                             : CurrentImagePropertyAlpha(binding.node);
+            std::array<float, 4> color4 { color.x(), color.y(), color.z(), alpha };
+            if (MaterialHasShaderUniform(*material, "g_Color4")) {
+                material->customShader.constValues["g_Color4"] = color4;
+                material->customShader.dirty                   = true;
+            }
+            if (MaterialHasShaderUniform(*material, "g_Color")) {
+                material->customShader.constValues["g_Color"] = color3;
+                material->customShader.dirty                  = true;
+            }
+        }
+    }
+}
+
+// Push a user-property alpha into every image whose `alpha` field carried a
+// `user` binding. Routes the value into the material's `g_UserAlpha` (if
+// declared), falling back to `g_Alpha` and finally `g_Color4.a` for materials
+// that only expose the combined tint uniform. Also pins the node's user-alpha
+// so EffectiveAlpha() reflects the new value for downstream consumers
+// (visibility multiplication, puppet compositing).
+void ApplyUserPropertyToImageAlpha(Scene& scene, const std::string& key,
+                                   const nlohmann::json& prop) {
+    auto it = scene.image_alpha_user_index.find(key);
+    if (it == scene.image_alpha_user_index.end()) return;
+
+    auto coerced = CoerceUserPropertyValue(prop);
+    if (! coerced.ok || coerced.value.size() < 1) return;
+
+    const float alpha = std::clamp(coerced.value[0], 0.0f, 1.0f);
+    for (const auto& binding : it->second) {
+        if (binding.node) binding.node->SetUserAlpha(alpha);
+
+        Eigen::Vector3f      color = CurrentImagePropertyColor(binding.node);
         std::array<float, 4> color4 { color.x(), color.y(), color.z(), alpha };
         for (auto* material : binding.materials) {
             if (! material) continue;
-            material->customShader.constValues["g_Color4"] = color4;
-            material->customShader.dirty                   = true;
+            const bool has_user_alpha = MaterialHasShaderUniform(*material, "g_UserAlpha");
+            if (has_user_alpha) {
+                material->customShader.constValues["g_UserAlpha"] = alpha;
+                material->customShader.dirty                      = true;
+            }
+            if (MaterialHasShaderUniform(*material, "g_Alpha")) {
+                material->customShader.constValues["g_Alpha"] = alpha;
+                material->customShader.dirty                  = true;
+            }
+            if (! has_user_alpha && MaterialHasShaderUniform(*material, "g_Color4")) {
+                material->customShader.constValues["g_Color4"] = color4;
+                material->customShader.dirty                   = true;
+            }
         }
     }
 }
@@ -439,39 +497,25 @@ void ApplyUserPropertyToCameraShake(Scene& scene, const std::string& key,
 
 void ApplyUserPropertyToCameraPath(Scene& scene, const std::string& key,
                                    const nlohmann::json& prop) {
-    auto it = scene.camera_path_user_index.find(key);
-    if (it == scene.camera_path_user_index.end()) return;
-
-    auto coerced = CoerceUserPropertyValue(prop);
-    if (! coerced.ok || coerced.value.size() < 1) return;
-
-    bool enabled = coerced.value[0] >= 0.5f;
-    for (auto& path : it->second) {
-        if (path) path->SetEnabled(enabled);
-    }
+    scene.ApplyUserCameraPathVisibilityBindings(key, prop);
 }
 
-// Walk the scene tree once and flip SceneNode::SetVisible for every node
-// whose `VisibleUserKey()` matches `key`. Cheap — tree is frozen post-parse
-// and typically < a few hundred nodes.
-void ApplyUserPropertyToNodeVisibility(Scene& scene, const std::string& key,
+bool ApplyUserPropertyToNodeVisibility(Scene& scene, const std::string& key,
                                        const nlohmann::json& prop) {
-    bool have_bool = false;
-    bool v         = false;
-    if (prop.is_object() && prop.contains("value") && prop.at("value").is_boolean()) {
-        v         = prop.at("value").get<bool>();
-        have_bool = true;
-    } else if (prop.is_boolean()) {
-        v         = prop.get<bool>();
-        have_bool = true;
-    }
-    if (! have_bool) return;
-    std::function<void(SceneNode*)> walk = [&](SceneNode* n) {
-        if (! n) return;
-        if (n->VisibleUserKey() == key) n->SetVisible(v);
-        for (auto& c : n->GetChildren()) walk(c.as_ptr());
-    };
-    walk(scene.sceneGraph.as_ptr());
+    return scene.ApplyUserNodeVisibilityBindings(key, prop);
+}
+
+// Bridge the host-facing MediaStatus (sr::MediaStatus) to the script-facing
+// one (sr::script::MediaStatus). The two are field-for-field identical today;
+// the copy keeps the host layer from depending on the script module's type.
+sr::script::MediaStatus ToScriptMediaStatus(const MediaStatus& status) {
+    return sr::script::MediaStatus { .state            = status.state,
+                                     .title            = status.title,
+                                     .artist           = status.artist,
+                                     .album            = status.album,
+                                     .album_artist     = status.album_artist,
+                                     .art_url          = status.art_url,
+                                     .previous_art_url = status.previous_art_url };
 }
 
 void MergeProjectUserProperties(const std::filesystem::path&                     project_dir,
@@ -583,6 +627,7 @@ public:
     void on(RenderSetFillMode&&);
     void on(RenderSetSpeed&&);
     void on(RenderSetUserProperty&&);
+    void on(RenderSetMediaStatus&&);
     void on(RenderStop&&);
     void on(RenderDraw&&);
     void on(RenderSwapchainReady&&);
@@ -735,6 +780,7 @@ void SceneRenderController::on(RenderDraw&&) {
                 std::span<const float, 64>(fi.audio_right));
             sr::script::TickSceneScripts(*m_scene, fi);
             m_scene->TickCameraPaths();
+            m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
         }
         m_scene->paritileSys->Emitt();
@@ -792,12 +838,37 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
     ApplyUserPropertyToClear(*m_scene, key, m.property);
     ApplyUserPropertyToShaders(*m_scene, key, m.property);
     ApplyUserPropertyToImageColor(*m_scene, key, m.property);
+    ApplyUserPropertyToImageAlpha(*m_scene, key, m.property);
     ApplyUserPropertyToParticles(*m_scene, key, m.property);
     ApplyUserPropertyToSoundVolume(*m_scene, key, m.property);
     ApplyUserPropertyToCameraParallax(*m_scene, key, m.property);
     ApplyUserPropertyToCameraShake(*m_scene, key, m.property);
     ApplyUserPropertyToCameraPath(*m_scene, key, m.property);
-    ApplyUserPropertyToNodeVisibility(*m_scene, key, m.property);
+    bool requires_graph_rebuild = ApplyUserPropertyToNodeVisibility(*m_scene, key, m.property);
+    requires_graph_rebuild =
+        m_scene->ApplyUserImageEffectVisibilityBindings(key, m.property) || requires_graph_rebuild;
+    (void)requires_graph_rebuild;
+}
+
+void SceneRenderController::on(RenderSetMediaStatus&& m) {
+    if (! m_scene) return;
+
+    // Script-side fanout: dispatch mediaPlaybackChanged / mediaPropertiesChanged
+    // / mediaThumbnailChanged to every live field script. This is the
+    // primary effect of a media-status push on macOS.
+    sr::script::SetSceneMediaStatus(*m_scene, ToScriptMediaStatus(m.status));
+
+    // TODO(port): upstream additionally refreshes the `$mediaThumbnail` /
+    // `$mediaPreviousThumbnail` material texture bindings at runtime here
+    // (ApplyUserPropertyToMaterialTextures + refreshPreparedMaterialTextures,
+    // falling back to rebuildRenderGraph). The port has no runtime material-
+    // texture refresh path yet — `on(RenderSetUserProperty)` above likewise
+    // skips it — so the art_url is not pushed into scene textures from here.
+    // The TextureDecoder external-image + percent-decode support
+    // (ParseExternalImage / ResolveExternalImagePath) is in place so that
+    // once the refresh path lands, mpris `file://...` art URLs will resolve.
+    // For now, scene scripts still receive the thumbnail event with the
+    // `thumbnail`/`artUrl` strings and can react in JS.
 }
 
 void SceneRenderController::on(RenderInit&& m) {
@@ -1181,6 +1252,13 @@ void SceneWallpaper::setFillMode(FillMode mode) {
 
 void SceneWallpaper::setSpeed(float speed) {
     (void)m_runtime->mainSender().send(MainMsg { MainSetSpeed { speed } });
+}
+
+void SceneWallpaper::setMediaStatus(MediaStatus status) {
+    // Media status is transient (no config to mirror), so bypass the main
+    // thread and post straight to the render thread that owns the Scene +
+    // script runtime — matches upstream's setMediaStatus routing.
+    (void)m_runtime->renderSender().send(RenderMsg { RenderSetMediaStatus { std::move(status) } });
 }
 
 void SceneWallpaper::setUserPropertyRaw(std::string_view name, std::string value) {

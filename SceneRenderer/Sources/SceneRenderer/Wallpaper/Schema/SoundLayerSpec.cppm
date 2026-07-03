@@ -66,8 +66,7 @@ struct SoundObject {
         sr::GetJsonValue(json, "scale", scale, false);
         sr::GetJsonValue(json, "mintime", mintime, false);
         sr::GetJsonValue(json, "maxtime", maxtime, false);
-        sr::GetJsonValue(json, "visible", visible, false);
-        ReadVisibleUserBinding(json, visible_user);
+        ReadVisibleProperty(json, visible, visible_user);
         visible_user_key = visible_user.name;
         sr::GetJsonValue(json, "name", name, false);
         sr::GetJsonValue(json, "id", id, false);

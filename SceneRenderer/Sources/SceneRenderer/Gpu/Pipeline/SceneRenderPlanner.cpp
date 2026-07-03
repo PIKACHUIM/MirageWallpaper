@@ -18,6 +18,15 @@ using namespace sr;
 namespace sr::rg
 {
 
+// TODO(4b41483): upstream's SceneToRenderGraph rewrite (~476 lines) drives
+// graph construction off a RenderSceneSnapshot / SceneResourceIndex instead of
+// walking Scene::sceneGraph directly, and threads RenderProgram / render_items
+// through the planner. The port has no snapshot infrastructure, so the
+// pre-4b41483 scene-graph-walking planner is retained. The new texture-request
+// helpers (MakeRenderTargetTextureRequest etc. in RenderResources.cppm) are
+// available for the passes to adopt incrementally; a full planner port is
+// deferred until RenderSceneSnapshot lands.
+
 void doCopy(RenderGraphBuilder& builder, vulkan::CopyPass::Desc& desc, TexNode* in, TexNode* out) {
     builder.read(in);
     builder.write(out);
@@ -130,8 +139,9 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
         effs->ResolveEffect(scene.default_effect_mesh, "effect");
 
         for (usize i = 0; i < effs->EffectCount(); i++) {
-            auto& eff     = effs->GetEffect(i);
-            auto  cmdItor = eff->commands.begin();
+            auto& eff = effs->GetEffect(i);
+            if (! eff || ! eff->runtime_visible) continue;
+            auto cmdItor = eff->commands.begin();
             auto  cmdEnd  = eff->commands.end();
             int   nodePos = 0;
             for (auto& n : eff->nodes) {
@@ -156,8 +166,11 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
     if (! node->Camera().empty()) {
         auto& cam = scene.cameras.at(node->Camera());
         if (cam->HasImgEffect()) {
-            imgeff = cam->GetImgEffect().get();
-            output = imgeff->FirstTarget();
+            auto* effect = cam->GetImgEffect().get();
+            if (effect->EffectCount() == 0 || effect->HasRuntimeVisibleEffect()) {
+                imgeff = effect;
+                output = imgeff->FirstTarget();
+            }
         }
     }
 
@@ -255,7 +268,7 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
     }
 
     // load effect
-    if (imgeff != nullptr) loadEffect(imgeff);
+    if (imgeff != nullptr && imgeff->HasRuntimeVisibleEffect()) loadEffect(imgeff);
 }
 
 // Bottom-up collect: identify SceneNode subtrees whose every node is in
@@ -308,6 +321,15 @@ static void CollectLinkedIds(SceneNode* node, Scene& scene, Set<i32>& out) {
     for (auto& c : node->GetChildren()) CollectLinkedIds(c.as_ptr(), scene, out);
 }
 
+static bool ShouldSkipNoRuntimeEffect(SceneNode* node, Scene& scene) {
+    if (node == nullptr || node->Camera().empty()) return false;
+    auto camera_it = scene.cameras.find(node->Camera());
+    if (camera_it == scene.cameras.end() || ! camera_it->second->HasImgEffect()) return false;
+    const auto& effect_layer = camera_it->second->GetImgEffect();
+    return effect_layer && effect_layer->SkipWhenNoRuntimeEffect() &&
+           effect_layer->EffectCount() > 0 && ! effect_layer->HasRuntimeVisibleEffect();
+}
+
 std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene& scene) {
     std::unique_ptr<rg::RenderGraph> rgraph = std::make_unique<rg::RenderGraph>();
     ExtraInfo                        extra { .rgraph = rgraph.get(), .scene = &scene };
@@ -340,8 +362,10 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene& scene) {
         [&extra, &scene, &linked_ids](SceneNode* node) {
             const i32  nid      = node->ID();
             const bool elidable = scene.elidable_layer_ids.count(nid) != 0;
+            const bool linked   = linked_ids.count(nid) != 0;
+            if (! linked && ShouldSkipNoRuntimeEffect(node, scene)) return;
             if (elidable) {
-                if (linked_ids.count(nid) == 0) return;
+                if (! linked) return;
                 std::string link_key = GenLinkTex((idx)nid);
                 if (! node->Camera().empty()) {
                     auto cit = scene.cameras.find(node->Camera());

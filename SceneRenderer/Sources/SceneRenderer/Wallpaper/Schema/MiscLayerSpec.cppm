@@ -7,6 +7,7 @@ import sr.json;
 import :animation_layer;
 export import :field_binding;
 import :visibility_binding;
+import :image_object;
 import :scene_document;
 
 // Object kinds beyond image/light/particle/sound: text overlays, .mdl
@@ -75,19 +76,19 @@ struct TextObject {
     bool                 ledsource { false };
     std::array<float, 3> backgroundcolor { 0.0f, 0.0f, 0.0f };
     float                backgroundbrightness { 1.0f };
+    std::vector<ImageEffect> effects;
 
     bool FromJson(const nlohmann::json& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*v*/) {
+    bool FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersion /*v*/) {
         sr::GetJsonValue(json, "id", id, false);
         sr::GetJsonValue(json, "name", name, false);
         sr::GetJsonValue(json, "origin", origin, false);
         sr::GetJsonValue(json, "scale", scale, false);
         sr::GetJsonValue(json, "angles", angles, false);
         sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false);
-        sr::GetJsonValue(json, "visible", visible, false);
-        ReadVisibleUserBinding(json, visible_user);
+        ReadVisibleProperty(json, visible, visible_user);
         visible_user_key = visible_user.name;
         sr::GetJsonValue(json, "locktransforms", locktransforms, false);
         sr::GetJsonValue(json, "muteineditor", muteineditor, false);
@@ -125,6 +126,13 @@ struct TextObject {
         sr::GetJsonValue(json, "ledsource", ledsource, false);
         sr::GetJsonValue(json, "backgroundcolor", backgroundcolor, false);
         sr::GetJsonValue(json, "backgroundbrightness", backgroundbrightness, false);
+        if (json.contains("effects")) {
+            for (const auto& jE : json.at("effects")) {
+                ImageEffect wpeff;
+                wpeff.FromJson(jE, vfs);
+                effects.push_back(std::move(wpeff));
+            }
+        }
         AbsorbAllFieldBindings(json, field_bindings);
         return true;
     }
@@ -168,8 +176,7 @@ struct ModelObject {
         sr::GetJsonValue(json, "scale", scale, false);
         sr::GetJsonValue(json, "angles", angles, false);
         sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false);
-        sr::GetJsonValue(json, "visible", visible, false);
-        ReadVisibleUserBinding(json, visible_user);
+        ReadVisibleProperty(json, visible, visible_user);
         visible_user_key = visible_user.name;
         sr::GetJsonValue(json, "locktransforms", locktransforms, false);
         sr::GetJsonValue(json, "muteineditor", muteineditor, false);
@@ -228,8 +235,7 @@ struct CameraObject {
         sr::GetJsonValue(json, "scale", scale, false);
         sr::GetJsonValue(json, "angles", angles, false);
         sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false);
-        sr::GetJsonValue(json, "visible", visible, false);
-        ReadVisibleUserBinding(json, visible_user);
+        ReadVisibleProperty(json, visible, visible_user);
         visible_user_key = visible_user.name;
         sr::GetJsonValue(json, "locktransforms", locktransforms, false);
         sr::GetJsonValue(json, "muteineditor", muteineditor, false);

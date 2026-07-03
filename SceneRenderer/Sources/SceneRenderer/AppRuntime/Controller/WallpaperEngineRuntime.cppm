@@ -22,6 +22,22 @@ using FirstFrameCallback = std::function<void()>;
 // the rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
 
+// Host media playback snapshot, pushed in via SceneWallpaper::setMediaStatus.
+// `state` matches the WE `MediaPlaybackEvent` JS enum (0=stopped, 1=playing,
+// 2=paused). The runtime forwards this to the script runtime as a media
+// event and (where the renderer supports it) refreshes `$mediaThumbnail` /
+// `$mediaPreviousThumbnail` material texture bindings from `art_url` /
+// `previous_art_url`.
+struct MediaStatus {
+    uint32_t    state { 0 };
+    std::string title;
+    std::string artist;
+    std::string album;
+    std::string album_artist;
+    std::string art_url;
+    std::string previous_art_url;
+};
+
 struct SceneWallpaperConfig {
     std::string                                     source_pkg_path;
     std::string                                     assets_dir;
@@ -66,6 +82,7 @@ public:
     void setMuted(bool);
     void setFillMode(FillMode);
     void setSpeed(float);
+    void setMediaStatus(MediaStatus);
     void setUserPropertyRaw(std::string_view, std::string);
     void setUserPropertyJson(std::string_view, nlohmann::json);
     void setOnFirstFrame(FirstFrameCallback);

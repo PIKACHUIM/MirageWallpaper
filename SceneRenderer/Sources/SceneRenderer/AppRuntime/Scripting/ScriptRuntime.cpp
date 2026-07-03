@@ -320,6 +320,11 @@ struct DeferredCb {
 
 struct EngineHostState {
     FrameInputs inputs;
+    // Most recent media snapshot pushed via JsRuntime::SetMediaStatus, plus
+    // an "ever-seen" flag so the first push always fires all three callbacks
+    // (edge-detect treats `first` as a change against nothing).
+    MediaStatus media;
+    bool        media_initialized { false };
     JSValue     audio_buffer { JS_UNDEFINED };
     uint32_t    audio_buffer_resolution { 64 };
     bool        audio_buffer_built { false };
@@ -869,9 +874,10 @@ JSValue MakeCursorEvent(JSContext* ctx, const CursorWorld& c, int button) {
 
 // Invoke `name` on the script's module namespace if exported, passing one
 // event arg. `thisLayer` should already be bound to the script's node by
-// the caller. Exceptions are caught and logged once per sha.
-void InvokeCursorCallback(JSContext* ctx, JSValue ns, const char* name, JSValue ev,
-                          JsRuntime::Impl* rt, std::string_view sha) {
+// the caller. Exceptions are caught and logged once per sha. Used for both
+// cursor events and media events.
+void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue ev,
+                         JsRuntime::Impl* rt, std::string_view sha) {
     JSValue fn = JS_GetPropertyStr(ctx, ns, name);
     if (JS_IsFunction(ctx, fn)) {
         JSValue arg = JS_DupValue(ctx, ev);
@@ -1142,6 +1148,9 @@ globalThis.engine.isScreensaver     = function() { return false; };
 // these methods covers the audio-responsive cluster (1023 instances).
 class Vec2 {
   constructor(x, y) {
+    if (typeof x === 'object' && x !== null) {
+      this.x = x.x ?? 0; this.y = x.y ?? 0; return;
+    }
     // Single-number arg splats to both components (WE convention,
     // e.g. `new Vec2(0.5)` => Vec2(0.5, 0.5)).
     if (typeof x === 'number' && y === undefined) { this.x = x; this.y = x; return; }
@@ -1272,6 +1281,10 @@ function __wwCreateAnimationStub() {
 }
 globalThis.__wwCreateAnimationStub = __wwCreateAnimationStub;
 globalThis.thisLayer = __wwCreateNodeStub();
+// WE alias: `thisObject` mirrors `thisLayer` so media-event callbacks (and
+// any script code) can reference the bound node under either name. Swapped
+// in lockstep with `thisLayer` by `__wwBindLayer` / BindThisLayer below.
+globalThis.thisObject = globalThis.thisLayer;
 globalThis.thisScene = __wwCreateNodeStub();
 
 // `input` is the WE-global cursor / input state. Scripts often guard with
@@ -1291,7 +1304,7 @@ globalThis.input = {
 };
 
 // Hook used by the C++ side to swap the stub for a real per-script binding.
-globalThis.__wwBindLayer = function(obj) { globalThis.thisLayer = obj; };
+globalThis.__wwBindLayer = function(obj) { globalThis.thisLayer = obj; globalThis.thisObject = obj; };
 globalThis.__wwBindScene = function(obj) { globalThis.thisScene = obj; };
 
 // --- MediaPlaybackEvent enum ------------------------------------------------
@@ -2131,16 +2144,84 @@ void CaptureDefaultBindings(JSContext* ctx) {
 }
 
 // Write `globalThis.thisLayer = val`. `val` is duplicated; ownership of
-// the original ref stays with the caller.
+// the original ref stays with the caller. `thisObject` is kept in sync as
+// a WE-compatible alias of `thisLayer`.
 void BindThisLayer(JSContext* ctx, JSValueConst val) {
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, val));
+    JS_SetPropertyStr(ctx, g, "thisObject", JS_DupValue(ctx, val));
     JS_FreeValue(ctx, g);
 }
 void BindThisScene(JSContext* ctx, JSValueConst val) {
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "thisScene", JS_DupValue(ctx, val));
     JS_FreeValue(ctx, g);
+}
+
+// --- media-event payload builders ------------------------------------------
+// Each WE media callback receives a differently-shaped event object:
+//   mediaPlaybackChanged   → { state: MediaPlaybackEvent }
+//   mediaPropertiesChanged → { title, artist, album, albumArtist }
+//   mediaThumbnailChanged  → { hasThumbnail, thumbnail, artUrl,
+//                              previousThumbnail, primaryColor, secondaryColor }
+// `primaryColor`/`secondaryColor` are placeholder white/black until a real
+// colour-extraction pass exists; scripts only read them as Vec3.
+
+JSValue MakeMediaPlaybackEvent(JSContext* ctx, const MediaStatus& status) {
+    JSValue ev = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx, ev, "state", JS_NewUint32(ctx, status.state), JS_PROP_C_W_E);
+    return ev;
+}
+
+JSValue MakeMediaPropertiesEvent(JSContext* ctx, const MediaStatus& status) {
+    JSValue ev = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "title",
+                              JS_NewStringLen(ctx, status.title.data(), status.title.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "artist",
+                              JS_NewStringLen(ctx, status.artist.data(), status.artist.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "album",
+                              JS_NewStringLen(ctx, status.album.data(), status.album.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx,
+        ev,
+        "albumArtist",
+        JS_NewStringLen(ctx, status.album_artist.data(), status.album_artist.size()),
+        JS_PROP_C_W_E);
+    return ev;
+}
+
+JSValue MakeMediaThumbnailEvent(JSContext* ctx, const MediaStatus& status) {
+    JSValue ev = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(
+        ctx, ev, "hasThumbnail", JS_NewBool(ctx, ! status.art_url.empty()), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "thumbnail",
+                              JS_NewStringLen(ctx, status.art_url.data(), status.art_url.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "artUrl",
+                              JS_NewStringLen(ctx, status.art_url.data(), status.art_url.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx,
+        ev,
+        "previousThumbnail",
+        JS_NewStringLen(ctx, status.previous_art_url.data(), status.previous_art_url.size()),
+        JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "primaryColor", MakeVec3(ctx, 1, 1, 1), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "secondaryColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
+    return ev;
 }
 
 } // namespace
@@ -2261,6 +2342,54 @@ void JsRuntime::SetUserProperty(std::string_view key, const json& property) {
     JS_FreeValue(ctx, global);
 }
 
+void JsRuntime::SetMediaStatus(const MediaStatus& status) {
+    if (! m_impl || ! m_impl->ctx) return;
+    JSContext* ctx         = m_impl->ctx;
+    auto&      host        = m_impl->host;
+    const bool first       = ! host.media_initialized;
+    const auto prev        = host.media;
+    host.media             = status;
+    host.media_initialized = true;
+
+    // Edge-detect per channel so an unchanged snapshot is a no-op (scripts
+    // otherwise re-run their media handlers every push). `first` forces all
+    // three so initial state reaches scripts even when fields are default.
+    const bool playback_changed   = first || prev.state != status.state;
+    const bool properties_changed = first || prev.title != status.title ||
+                                    prev.artist != status.artist || prev.album != status.album ||
+                                    prev.album_artist != status.album_artist;
+    const bool thumbnail_changed =
+        first || prev.art_url != status.art_url || prev.previous_art_url != status.previous_art_url;
+    if (! playback_changed && ! properties_changed && ! thumbnail_changed) return;
+
+    for (auto& fs : m_impl->scripts) {
+        auto* I = fs->m_impl.get();
+        if (! I->alive) continue;
+        BindThisLayer(
+            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        m_impl->host.active_field_script = fs.get();
+        if (playback_changed) {
+            JSValue ev = MakeMediaPlaybackEvent(ctx, status);
+            InvokeEventCallback(
+                ctx, I->module_ns, "mediaPlaybackChanged", ev, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, ev);
+        }
+        if (properties_changed) {
+            JSValue ev = MakeMediaPropertiesEvent(ctx, status);
+            InvokeEventCallback(
+                ctx, I->module_ns, "mediaPropertiesChanged", ev, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, ev);
+        }
+        if (thumbnail_changed) {
+            JSValue ev = MakeMediaThumbnailEvent(ctx, status);
+            InvokeEventCallback(
+                ctx, I->module_ns, "mediaThumbnailChanged", ev, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, ev);
+        }
+    }
+    m_impl->host.active_field_script = nullptr;
+}
+
 void JsRuntime::SetBoneResolvers(BoneIndexResolver     index_resolver,
                                  BoneTransformResolver transform_resolver) {
     m_impl->host.bone_index_resolver     = std::move(index_resolver);
@@ -2316,7 +2445,7 @@ void JsRuntime::TickAll() {
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
         if (now_inside != I->cursor_inside) {
-            InvokeCursorCallback(ctx,
+            InvokeEventCallback(ctx,
                                  I->module_ns,
                                  now_inside ? "cursorEnter" : "cursorLeave",
                                  ensure_ev(-1),
@@ -2325,15 +2454,15 @@ void JsRuntime::TickAll() {
             I->cursor_inside = now_inside;
         }
         if (now_inside) {
-            InvokeCursorCallback(
+            InvokeEventCallback(
                 ctx, I->module_ns, "cursorMove", ensure_ev(-1), m_impl.get(), I->sha);
         }
         if (btn_pressed && now_inside) {
             for (int b = 0; b < 3; ++b) {
                 if (btn_pressed & (1u << b)) {
-                    InvokeCursorCallback(
+                    InvokeEventCallback(
                         ctx, I->module_ns, "cursorDown", ensure_ev(b), m_impl.get(), I->sha);
-                    InvokeCursorCallback(
+                    InvokeEventCallback(
                         ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
                 }
             }
@@ -2341,7 +2470,7 @@ void JsRuntime::TickAll() {
         if (btn_release && now_inside) {
             for (int b = 0; b < 3; ++b) {
                 if (btn_release & (1u << b)) {
-                    InvokeCursorCallback(
+                    InvokeEventCallback(
                         ctx, I->module_ns, "cursorUp", ensure_ev(b), m_impl.get(), I->sha);
                 }
             }
@@ -2684,20 +2813,12 @@ void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const nlohmann
     // WE field-binding fanout: lights whose `visible` field is tied to
     // `engine.userProperties[key]` flip runtime visibility here. Scene-only
     // (no JS) wallpapers also need this, so it runs unconditionally.
-    bool have_bool = false;
-    bool v         = false;
-    if (property.is_object() && property.contains("value") && property.at("value").is_boolean()) {
-        v         = property.at("value").get<bool>();
-        have_bool = true;
-    } else if (property.is_boolean()) {
-        v         = property.get<bool>();
-        have_bool = true;
-    }
-    if (have_bool) {
-        const std::string key_s { key };
-        for (auto& lp : scene.lights) {
-            if (lp && lp->visibleUserKey() == key_s) lp->setRuntimeVisible(v);
-        }
+    scene.ApplyUserLightVisibilityBindings(key, property);
+}
+
+void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status) {
+    if (auto* ss = static_cast<ScriptScene*>(scene.script_scene.get()); ss != nullptr) {
+        ss->runtime().SetMediaStatus(status);
     }
 }
 
