@@ -236,6 +236,12 @@ VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper
 - 修改壁纸属性、导入逻辑或渲染控制协议时，请同时检查 `project.json` 解析、运行时持久化和对应渲染器控制命令。
 - 大型资源请放入合适的 `assets` 子目录，并注意最终 App 体积。
 
+## 鸣谢
+[MoltenVK](https://github.com/KhronosGroup/MoltenVK) 提供运行时转译
+[wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) 的UI框架
+[waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) 的粒子系统
+[laobamac/OpenMetalWallpaper](https://github.com/laobamac/OpenMetalWallpaper) 的模型解析
+
 ## 许可证
 
 本项目使用 [GPL-3.0](LICENSE) 许可证发布。仓库中包含的第三方组件和资源遵循各自许可证要求。
