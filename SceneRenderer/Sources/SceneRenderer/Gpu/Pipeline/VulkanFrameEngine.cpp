@@ -1,4 +1,6 @@
 module;
+#include <chrono>
+#include <cstdlib>
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
@@ -23,6 +25,23 @@ using namespace sr::vulkan;
 
 constexpr uint64_t vk_wait_time { 10u * 1000u * 1000000u };
 constexpr uint32_t vk_command_num { 2 };
+
+namespace
+{
+bool PerfDiagEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SCENERENDERER_PERF_DIAG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+using PerfClock = std::chrono::steady_clock;
+
+double PerfMs(PerfClock::time_point begin, PerfClock::time_point end = PerfClock::now()) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+} // namespace
 
 constexpr std::array base_inst_exts {
     Extension { false, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME },
@@ -57,6 +76,14 @@ void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
     device_exts.push_back({ false, VK_EXT_SHADER_OBJECT_EXTENSION_NAME });
 }
 
+bool RequiresVulkanVideoDeviceExtensions(std::string_view hwdec) {
+#if defined(__APPLE__)
+    return hwdec == "vulkan" || hwdec == "vaapi";
+#else
+    return hwdec != "none";
+#endif
+}
+
 struct VulkanRender::Impl {
     Impl()  = default;
     ~Impl() = default;
@@ -70,6 +97,8 @@ struct VulkanRender::Impl {
     void DestroyRenderingResource(RenderingResources&);
 
     void clearLastRenderGraph();
+    void clearTransientRenderGraphResources();
+    void clearRenderGraphResources(bool clear_imported_textures);
     void compileRenderGraph(Scene&, rg::RenderGraph&);
     void rebuildRenderPassScopes();
     void executeRenderPassScopes(RenderingResources&);
@@ -229,6 +258,9 @@ bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(std::move(info
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
 void VulkanRender::clearLastRenderGraph() { pImpl->clearLastRenderGraph(); };
+void VulkanRender::clearTransientRenderGraphResources() {
+    pImpl->clearTransientRenderGraphResources();
+};
 void VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     pImpl->compileRenderGraph(scene, rg);
 }
@@ -248,14 +280,6 @@ sr::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchai
 bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_inited) return true;
 
-#if defined(__APPLE__)
-    if (info.video_hwdec != "none") {
-        rstd_info("macOS video textures use software decode; ignoring video_hwdec={}",
-                  info.video_hwdec);
-        info.video_hwdec = "none";
-    }
-#endif
-
     m_redraw_cb = info.redraw_callback;
     VkExtent2D extent { info.width, info.height };
     if (extent.width * extent.height < 500 * 500) {
@@ -266,7 +290,8 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     std::vector<Extension> inst_exts { base_inst_exts.begin(), base_inst_exts.end() };
     std::vector<Extension> device_exts { base_device_exts.begin(), base_device_exts.end() };
-    if (info.video_hwdec != "none") {
+    const bool needs_vulkan_video = RequiresVulkanVideoDeviceExtensions(info.video_hwdec);
+    if (needs_vulkan_video) {
         AppendVideoDeviceExtensions(device_exts);
     }
 
@@ -288,7 +313,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
 
     const auto instance_api_version =
-        info.video_hwdec == "none" ? SCENERENDERER_VULKAN_VERSION : VK_API_VERSION_1_3;
+        needs_vulkan_video ? VK_API_VERSION_1_3 : SCENERENDERER_VULKAN_VERSION;
     if (! Instance::Create(m_instance, inst_exts, inst_layers, instance_api_version)) {
         rstd_error("init vulkan failed");
         return false;
@@ -551,28 +576,42 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 void VulkanRender::Impl::drawFrameSwapchain() {
     static size_t resource_index = 0;
 
+    const bool perf_diag = PerfDiagEnabled();
+    auto       perf_begin = PerfClock::now();
+    double     perf_acquire_ms {};
+    double     perf_record_ms {};
+    double     perf_submit_present_ms {};
+    double     perf_wait_ms {};
+
     RenderingResources& rr = m_rendering_resources;
     resource_index         = (resource_index + 1) % 3;
     uint32_t image_index   = 0;
     {
+        auto t = PerfClock::now();
         VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
                                                                  vk_wait_time,
                                                                  *rr.sem_swap_wait_image,
                                                                  {},
                                                                  &image_index));
+        if (perf_diag) perf_acquire_ms = PerfMs(t);
     }
     const auto& image = m_device->swapchain().images()[image_index];
 
     m_finpass->setPresent(image);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    });
-    m_dyn_buf->recordUpload(rr.command);
-    executeRenderPassScopes(rr);
-    (void)rr.command.End();
+    {
+        auto t = PerfClock::now();
+        (void)rr.command.Begin(VkCommandBufferBeginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        });
+        m_device->tex_cache().RecordPendingUploads(rr.command);
+        m_dyn_buf->recordUpload(rr.command);
+        executeRenderPassScopes(rr);
+        (void)rr.command.End();
+        if (perf_diag) perf_record_ms = PerfMs(t);
+    }
 
     auto& sem_present_done = m_sem_swap_finish_per_image[image_index];
 
@@ -592,56 +631,95 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pSignalSemaphores    = sem_present_done.address(),
     };
 
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
-    VkPresentInfoKHR present_info {
-        .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .pNext              = nullptr,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores    = sem_present_done.address(),
-        .swapchainCount     = 1,
-        .pSwapchains        = m_device->swapchain().handle().address(),
-        .pImageIndices      = &image_index,
-    };
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
+    {
+        auto t = PerfClock::now();
+        VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+        VkPresentInfoKHR present_info {
+            .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext              = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores    = sem_present_done.address(),
+            .swapchainCount     = 1,
+            .pSwapchains        = m_device->swapchain().handle().address(),
+            .pImageIndices      = &image_index,
+        };
+        VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
+        if (perf_diag) perf_submit_present_ms = PerfMs(t);
+    }
 
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+    {
+        auto t = PerfClock::now();
+        VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+        if (perf_diag) perf_wait_ms = PerfMs(t);
+    }
     m_finpass->finishFrameDump(*m_device);
+    m_device->tex_cache().ReleaseRecordedUploads();
     VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+
+    if (perf_diag) {
+        static uint64_t frame_count = 0;
+        ++frame_count;
+        if ((frame_count % 120u) == 0u) {
+            rstd_info("PerfDiag vulkan surface frame={} total_us={} acquire_us={} record_us={} submit_present_us={} wait_us={}",
+                      frame_count,
+                      static_cast<std::uint64_t>(PerfMs(perf_begin) * 1000.0),
+                      static_cast<std::uint64_t>(perf_acquire_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_record_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_submit_present_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_wait_ms * 1000.0));
+        }
+    }
 }
 void VulkanRender::Impl::drawFrameOffscreen() {
     if (! m_ex_swapchain) return;
 
+    const bool perf_diag = PerfDiagEnabled();
+    auto       perf_begin = PerfClock::now();
+    double     perf_poll_acquire_ms {};
+    double     perf_record_ms {};
+    double     perf_submit_ms {};
+    double     perf_wait_ms {};
+
     // Drain any pending bridge directive *before* committing to a slot.
     // Previous frame's GPU work has fenced at the tail of the last
     // drawFrameOffscreen, so the cmd pool is idle.
-    m_ex_swapchain->poll();
-
-    // Skip until both the swapchain has slots and the scene has loaded
-    // (FinPass.prepare runs from compileRenderGraph). FinPass itself is
-    // format-agnostic now — vkCmdBlitImage handles cross-format channel
-    // mapping, no rebuild needed on renegotiation.
-    if (! m_ex_swapchain->ready() || ! m_finpass->prepared()) {
-        return;
-    }
-
     RenderingResources& rr = m_rendering_resources;
     ImageParameters     image;
-    if (! m_ex_swapchain->acquireRenderTarget(image)) {
-        return;
+    {
+        auto t = PerfClock::now();
+        m_ex_swapchain->poll();
+
+        // Skip until both the swapchain has slots and the scene has loaded
+        // (FinPass.prepare runs from compileRenderGraph). FinPass itself is
+        // format-agnostic now — vkCmdBlitImage handles cross-format channel
+        // mapping, no rebuild needed on renegotiation.
+        if (! m_ex_swapchain->ready() || ! m_finpass->prepared()) {
+            return;
+        }
+
+        if (! m_ex_swapchain->acquireRenderTarget(image)) {
+            return;
+        }
+        if (perf_diag) perf_poll_acquire_ms = PerfMs(t);
     }
 
     m_finpass->setPresent(image);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    });
-    m_dyn_buf->recordUpload(rr.command);
+    {
+        auto t = PerfClock::now();
+        (void)rr.command.Begin(VkCommandBufferBeginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        });
+        m_device->tex_cache().RecordPendingUploads(rr.command);
+        m_dyn_buf->recordUpload(rr.command);
 
-    executeRenderPassScopes(rr);
+        executeRenderPassScopes(rr);
 
-    (void)rr.command.End();
+        (void)rr.command.End();
+        if (perf_diag) perf_record_ms = PerfMs(t);
+    }
 
     VkSubmitInfo sub_info {
         .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -651,13 +729,36 @@ void VulkanRender::Impl::drawFrameOffscreen() {
         .signalSemaphoreCount = 1,
         .pSignalSemaphores    = rr.sem_export.address(),
     };
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+    {
+        auto t = PerfClock::now();
+        VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+        if (perf_diag) perf_submit_ms = PerfMs(t);
+    }
 
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+    {
+        auto t = PerfClock::now();
+        VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+        if (perf_diag) perf_wait_ms = PerfMs(t);
+    }
     m_finpass->finishFrameDump(*m_device);
+    m_device->tex_cache().ReleaseRecordedUploads();
     VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
 
     m_ex_swapchain->submitRendered(-1);
+
+    if (perf_diag) {
+        static uint64_t frame_count = 0;
+        ++frame_count;
+        if ((frame_count % 120u) == 0u) {
+            rstd_info("PerfDiag vulkan offscreen frame={} total_us={} acquire_us={} record_us={} submit_us={} wait_us={}",
+                      frame_count,
+                      static_cast<std::uint64_t>(PerfMs(perf_begin) * 1000.0),
+                      static_cast<std::uint64_t>(perf_poll_acquire_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_record_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_submit_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_wait_ms * 1000.0));
+        }
+    }
 }
 
 bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
@@ -770,18 +871,30 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
     scene.CaptureCameraPathViewports();
 }
 
-void VulkanRender::Impl::clearLastRenderGraph() {
+void VulkanRender::Impl::clearRenderGraphResources(bool clear_imported_textures) {
     for (auto& p : m_passes) {
         p->destory(*m_device, m_rendering_resources);
     }
     m_render_scopes.clear();
     m_passes.clear();
-    m_device->tex_cache().Clear();
+    if (clear_imported_textures) {
+        m_device->tex_cache().Clear();
+    } else {
+        m_device->tex_cache().ClearTransientGraphResources();
+    }
     m_device->mesh_cache().onRenderGraphCleared();
-    m_shader_reflection_cache.Clear();
+    if (clear_imported_textures) {
+        m_shader_reflection_cache.Clear();
+    }
 
     m_dyn_buf->destroy();
     m_dyn_buf->allocate();
+}
+
+void VulkanRender::Impl::clearLastRenderGraph() { clearRenderGraphResources(true); }
+
+void VulkanRender::Impl::clearTransientRenderGraphResources() {
+    clearRenderGraphResources(false);
 }
 
 void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {

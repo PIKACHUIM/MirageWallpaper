@@ -8,6 +8,8 @@ module;
 #include "Utils/AutoDeletor.hpp"
 #include "vvk/macros.hpp"
 
+#include <cmath>
+#include <limits>
 #include <unistd.h>
 
 module sr.vulkan;
@@ -324,6 +326,70 @@ inline VkResult CopyImageData(std::span<const BufferParameters> in_bufs,
     } while (false);
     return result;
 }
+
+void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& image,
+                             VkBuffer buffer, VkDeviceSize buffer_offset,
+                             VkOffset3D image_offset, VkExtent3D image_extent,
+                             VkImageLayout old_layout, VkImageLayout final_layout) {
+    if (image.handle == VK_NULL_HANDLE || buffer == VK_NULL_HANDLE || image_extent.width == 0 ||
+        image_extent.height == 0)
+        return;
+
+    VkImageSubresourceRange range {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel   = 0,
+        .levelCount     = 1,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+    };
+    VkImageMemoryBarrier to_xfer {
+        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
+        .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout        = old_layout,
+        .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .image            = image.handle,
+        .subresourceRange = range,
+    };
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                            VK_PIPELINE_STAGE_TRANSFER_BIT |
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        to_xfer);
+
+    VkBufferImageCopy region {
+        .bufferOffset = buffer_offset,
+        .imageSubresource =
+            VkImageSubresourceLayers {
+                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel       = 0,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            },
+        .imageOffset = image_offset,
+        .imageExtent = image_extent,
+    };
+    cmd.CopyBufferToImage(buffer,
+                          image.handle,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          region);
+
+    VkImageMemoryBarrier to_shader {
+        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout        = final_layout,
+        .image            = image.handle,
+        .subresourceRange = range,
+    };
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        to_shader);
+}
 } // namespace
 
 std::size_t TextureKey::HashValue(const TextureKey& k) {
@@ -588,6 +654,7 @@ private:
 wavsen::video::HwAccel ParseHwdec(std::string_view value) {
     if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
     if (value == "vaapi") return wavsen::video::HwAccel::Vaapi;
+    if (value == "videotoolbox") return wavsen::video::HwAccel::VideoToolbox;
     if (value == "none") return wavsen::video::HwAccel::None;
     return wavsen::video::HwAccel::Auto;
 }
@@ -597,6 +664,7 @@ const char* HwdecLabel(wavsen::video::HwAccel h) {
     case wavsen::video::HwAccel::Auto: return "auto";
     case wavsen::video::HwAccel::Vulkan: return "vulkan";
     case wavsen::video::HwAccel::Vaapi: return "vaapi";
+    case wavsen::video::HwAccel::VideoToolbox: return "videotoolbox";
     case wavsen::video::HwAccel::None: return "none";
     }
     return "?";
@@ -607,8 +675,18 @@ const char* FrameKindLabel(wavsen::video::FrameKind k) {
     case wavsen::video::FrameKind::Sw: return "sw";
     case wavsen::video::FrameKind::VulkanShared: return "vulkan-shared";
     case wavsen::video::FrameKind::VaapiDrm: return "vaapi-drm";
+    case wavsen::video::FrameKind::VideoToolboxSw: return "videotoolbox-sw";
     }
     return "?";
+}
+
+bool NeedsSharedVulkanProducer(wavsen::video::HwAccel hwdec) {
+#if defined(__APPLE__)
+    return hwdec == wavsen::video::HwAccel::Vulkan ||
+           hwdec == wavsen::video::HwAccel::Vaapi;
+#else
+    return hwdec != wavsen::video::HwAccel::None;
+#endif
 }
 
 std::vector<const char*> ExtensionPtrs(std::span<const std::string> names) {
@@ -715,8 +793,14 @@ struct TextureCache::VideoRegistry {
         std::unique_ptr<wavsen::video::VideoDecoder> decoder;
         wavsen::video::Nv12Frame                     nv12_scratch;
         std::vector<std::uint8_t>                    rgba_scratch;
+        VmaBufferParameters                          upload_stage;
+        std::size_t                                  upload_stage_size { 0 };
         double                                       pts_acc { 0.0 };
         double                                       last_pts { -1.0 };
+        double                                       pts_origin {
+            std::numeric_limits<double>::quiet_NaN()
+        };
+        double                                       frame_interval { 1.0 / 30.0 };
         bool                                         have_frame { false };
     };
     std::vector<std::unique_ptr<Slot>> slots;
@@ -886,15 +970,12 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         return std::make_unique<PkgRangedInputStream>(pkg, off, len);
     };
     auto                    requested_hwdec = ParseHwdec(m_video_registry->options.hwdec);
-#if defined(__APPLE__)
-    requested_hwdec = wavsen::video::HwAccel::None;
-#endif
     wavsen::video::OpenOpts opts {
         requested_hwdec,
         {},
     };
     const wavsen::video::Producer* producer = nullptr;
-    if (requested_hwdec != wavsen::video::HwAccel::None) {
+    if (NeedsSharedVulkanProducer(requested_hwdec)) {
         producer = m_video_registry->ensureProducer(m_device, slot->width, slot->height);
         if (! producer) opts.hwaccel = wavsen::video::HwAccel::None;
     }
@@ -911,6 +992,10 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         return {};
     }
     slot->decoder = std::move(dec_r).unwrap();
+    const double frame_interval = slot->decoder->frame_duration_seconds();
+    if (std::isfinite(frame_interval) && frame_interval > 0.0 && frame_interval < 1.0) {
+        slot->frame_interval = frame_interval;
+    }
     rstd_info("CreateVideoTex: {} hwdec={} decoder kind={}",
               image.key,
               HwdecLabel(requested_hwdec),
@@ -931,6 +1016,22 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
 
 void TextureCache::PumpVideoTextures(double dt_seconds) {
     if (! m_video_registry || m_video_registry->slots.empty()) return;
+
+    auto advance_slot_pts = [](VideoRegistry::Slot& s, double raw_pts) {
+        double next_pts = -1.0;
+        if (std::isfinite(raw_pts) && raw_pts >= 0.0) {
+            if (! std::isfinite(s.pts_origin)) s.pts_origin = raw_pts;
+            const double normalized = raw_pts - s.pts_origin;
+            if (std::isfinite(normalized) && normalized >= 0.0 &&
+                (s.last_pts < 0.0 || normalized > s.last_pts)) {
+                next_pts = normalized;
+            }
+        }
+        if (next_pts < 0.0) {
+            next_pts = (s.last_pts >= 0.0) ? (s.last_pts + s.frame_interval) : 0.0;
+        }
+        s.last_pts = next_pts;
+    };
 
     for (auto& up : m_video_registry->slots) {
         auto& s = *up;
@@ -956,6 +1057,9 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             case wavsen::video::FrameKind::VulkanShared: r = s.decoder->next_vk_frame(vkv); break;
             case wavsen::video::FrameKind::VaapiDrm: r = s.decoder->next_drm_frame(drmv); break;
             case wavsen::video::FrameKind::Sw: r = s.decoder->next_frame(s.nv12_scratch); break;
+            case wavsen::video::FrameKind::VideoToolboxSw:
+                r = s.decoder->next_frame(s.nv12_scratch);
+                break;
             }
             if (r.is_err()) {
                 rstd_error("PumpVideoTextures[{}]: decode {}: {}",
@@ -970,11 +1074,16 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                  * so a second call should yield data. Bail this tick. */
                 break;
             }
+            double frame_pts = -1.0;
             switch (fkind) {
-            case wavsen::video::FrameKind::VulkanShared: s.last_pts = vkv.pts_seconds; break;
-            case wavsen::video::FrameKind::VaapiDrm: s.last_pts = drmv.pts_seconds; break;
-            case wavsen::video::FrameKind::Sw: s.last_pts = s.nv12_scratch.pts_seconds; break;
+            case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
+            case wavsen::video::FrameKind::VaapiDrm: frame_pts = drmv.pts_seconds; break;
+            case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
+            case wavsen::video::FrameKind::VideoToolboxSw:
+                frame_pts = s.nv12_scratch.pts_seconds;
+                break;
             }
+            advance_slot_pts(s, frame_pts);
             got_new = true;
         }
         if (! got_new && s.have_frame) continue; /* nothing to upload */
@@ -992,6 +1101,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             cr_id = drmv.color_range;
             break;
         case wavsen::video::FrameKind::Sw:
+        case wavsen::video::FrameKind::VideoToolboxSw:
             cs_id = s.nv12_scratch.colorspace;
             cr_id = s.nv12_scratch.color_range;
             break;
@@ -1004,86 +1114,44 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             const std::size_t bytes = static_cast<std::size_t>(s.width) * s.height * 4;
             if (rgba.size() < bytes) return false;
 
-            VmaBufferParameters stage;
-            if (! CreateStagingBuffer(m_device.vma_allocator(), bytes, stage)) return false;
+            if (! s.upload_stage.handle || s.upload_stage_size < bytes) {
+                s.upload_stage      = {};
+                s.upload_stage_size = 0;
+                if (! CreateStagingBuffer(m_device.vma_allocator(), bytes, s.upload_stage))
+                    return false;
+                s.upload_stage_size = bytes;
+            }
             {
                 void* v = nullptr;
-                VVK_CHECK(stage.handle.MapMemory(&v));
+                VVK_CHECK(s.upload_stage.handle.MapMemory(&v));
                 std::memcpy(v, rgba.data(), bytes);
-                stage.handle.UnMapMemory();
+                s.upload_stage.handle.UnMapMemory();
             }
 
-            if (! m_tex_cmd) allocateCmd();
-            VVK_CHECK(m_tex_cmd.Begin(VkCommandBufferBeginInfo {
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                .pNext = nullptr,
-                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            }));
-            VkImageSubresourceRange range {
-                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel   = 0,
-                .levelCount     = 1,
-                .baseArrayLayer = 0,
-                .layerCount     = 1,
-            };
-            VkImageMemoryBarrier to_xfer {
-                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-                .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .image            = ip.handle,
-                .subresourceRange = range,
-            };
-            m_tex_cmd.PipelineBarrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                      VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                      0,
-                                      to_xfer);
-            VkBufferImageCopy region {};
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent                 = VkExtent3D { s.width, s.height, 1 };
-            m_tex_cmd.CopyBufferToImage(
-                *stage.handle, ip.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-            VkImageMemoryBarrier to_shader {
-                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-                .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .image            = ip.handle,
-                .subresourceRange = range,
-            };
-            m_tex_cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                      0,
-                                      to_shader);
-            VVK_CHECK(m_tex_cmd.End());
-            VkSubmitInfo si {
-                .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers    = m_tex_cmd.address(),
-            };
-            VVK_CHECK(m_device.graphics_queue().handle.Submit(si));
-            VVK_CHECK(m_device.handle().WaitIdle());
+            PendingImageUpload up {};
+            up.image        = ip;
+            up.buffer       = *s.upload_stage.handle;
+            up.image_extent = VkExtent3D { s.width, s.height, 1 };
+            m_pending_uploads.push_back(std::move(up));
             return true;
         };
 
-        if (fkind == wavsen::video::FrameKind::Sw) {
-            if (! ConvertNv12ToRgba(s.nv12_scratch, color_matrix, s.rgba_scratch)) {
-                rstd_error("PumpVideoTextures[{}]: CPU NV12->RGBA conversion failed", s.key);
-                continue;
+        auto* yuv = m_video_registry->ensureYuv(m_device, s.width, s.height);
+        if (! yuv) {
+            if (fkind == wavsen::video::FrameKind::Sw ||
+                fkind == wavsen::video::FrameKind::VideoToolboxSw) {
+                if (! ConvertNv12ToRgba(s.nv12_scratch, color_matrix, s.rgba_scratch)) {
+                    rstd_error("PumpVideoTextures[{}]: CPU NV12->RGBA conversion failed", s.key);
+                    continue;
+                }
+                if (! upload_rgba(s.rgba_scratch)) {
+                    rstd_error("PumpVideoTextures[{}]: CPU RGBA upload failed", s.key);
+                    continue;
+                }
+                s.have_frame = true;
             }
-            if (! upload_rgba(s.rgba_scratch)) {
-                rstd_error("PumpVideoTextures[{}]: CPU RGBA upload failed", s.key);
-                continue;
-            }
-            s.have_frame = true;
             continue;
         }
-
-        auto* yuv = m_video_registry->ensureYuv(m_device, s.width, s.height);
-        if (! yuv) continue;
 
         rstd::Result<int, wavsen::video::Error> cv = rstd::Ok(-1);
         switch (fkind) {
@@ -1117,6 +1185,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                                         color_matrix);
             break;
         case wavsen::video::FrameKind::Sw:
+        case wavsen::video::FrameKind::VideoToolboxSw:
             cv = yuv->convert_nv12(ip.handle,
                                    s.width,
                                    s.height,
@@ -1163,56 +1232,13 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
         stage.handle.UnMapMemory();
     }
 
-    if (! m_tex_cmd) allocateCmd();
-    VVK_CHECK(m_tex_cmd.Begin(VkCommandBufferBeginInfo {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    }));
-    VkImageSubresourceRange range {
-        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel   = 0,
-        .levelCount     = 1,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-    };
-    VkImageMemoryBarrier to_xfer {
-        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-        .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .image            = ip.handle,
-        .subresourceRange = range,
-    };
-    m_tex_cmd.PipelineBarrier(
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, to_xfer);
-    VkBufferImageCopy region {};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset                 = VkOffset3D { (int32_t)x, (int32_t)y, 0 };
-    region.imageExtent                 = VkExtent3D { w, h, 1 };
-    m_tex_cmd.CopyBufferToImage(
-        *stage.handle, ip.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-    VkImageMemoryBarrier to_shader {
-        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-        .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        .image            = ip.handle,
-        .subresourceRange = range,
-    };
-    m_tex_cmd.PipelineBarrier(
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, to_shader);
-    VVK_CHECK(m_tex_cmd.End());
-    VkSubmitInfo si {
-        .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .commandBufferCount = 1,
-        .pCommandBuffers    = m_tex_cmd.address(),
-    };
-    VVK_CHECK(m_device.graphics_queue().handle.Submit(si));
-    VVK_CHECK(m_device.handle().WaitIdle());
+    PendingImageUpload up {};
+    up.image         = ip;
+    up.buffer        = *stage.handle;
+    up.image_offset  = VkOffset3D { (int32_t)x, (int32_t)y, 0 };
+    up.image_extent  = VkExtent3D { w, h, 1 };
+    up.owned_stage   = std::move(stage);
+    m_pending_uploads.push_back(std::move(up));
     return true;
 }
 
@@ -1238,12 +1264,34 @@ void TextureCache::Clear() {
     m_tex_map.clear();
     ClearTransientGraphResources();
     if (m_video_registry) m_video_registry->slots.clear();
+    m_pending_uploads.clear();
+    m_recorded_uploads.clear();
 }
 
 void TextureCache::ClearTransientGraphResources() {
     m_query_map.clear();
     m_query_texs.clear();
 }
+
+void TextureCache::RecordPendingUploads(vvk::CommandBuffer& cmd) {
+    if (m_pending_uploads.empty()) return;
+    for (const auto& up : m_pending_uploads) {
+        RecordQueuedImageUpload(cmd,
+                                up.image,
+                                up.buffer,
+                                up.buffer_offset,
+                                up.image_offset,
+                                up.image_extent,
+                                up.old_layout,
+                                up.final_layout);
+    }
+    std::move(m_pending_uploads.begin(),
+              m_pending_uploads.end(),
+              std::back_inserter(m_recorded_uploads));
+    m_pending_uploads.clear();
+}
+
+void TextureCache::ReleaseRecordedUploads() { m_recorded_uploads.clear(); }
 
 std::optional<ImageParameters> TextureCache::Query(std::string_view key, TextureKey content_hash,
                                                    bool persist) {

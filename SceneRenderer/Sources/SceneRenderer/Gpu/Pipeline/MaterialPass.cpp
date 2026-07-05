@@ -366,9 +366,19 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     {
         SceneShader& shader = *(material_ref.customShader.shader);
 
-        if (! GenReflect(shader.codes, spvs, ref)) {
-            rstd_error("gen spv reflect failed, {}", shader.name);
-            return;
+        if (rr.shader_reflection_cache != nullptr) {
+            if (const auto* cached = rr.shader_reflection_cache->Query(shader); cached != nullptr) {
+                spvs = CloneShaderSpvs(*cached);
+                ref  = cached->reflected;
+            } else {
+                rstd_error("gen spv reflect failed, {}", shader.name);
+                return;
+            }
+        } else {
+            if (! GenReflect(shader.codes, spvs, ref)) {
+                rstd_error("gen spv reflect failed, {}", shader.name);
+                return;
+            }
         }
         if (diag) {
             rstd_info("RenderDiag pass prepare: node=\"{}\" material=\"{}\" shader=\"{}\" output=\"{}\" submesh={} vertex_arrays={} index_arrays={} inputs={} bindings={} blocks={}",

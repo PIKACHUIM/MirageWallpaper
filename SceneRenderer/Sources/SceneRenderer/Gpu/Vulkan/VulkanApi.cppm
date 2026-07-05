@@ -387,6 +387,13 @@ public:
 
     void RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const;
 
+    /* Record runtime image uploads queued by video textures / font atlases
+     * into the current frame command buffer. The upload staging buffers stay
+     * owned by TextureCache until ReleaseRecordedUploads(), which is called
+     * after the frame fence signals. */
+    void RecordPendingUploads(vvk::CommandBuffer& cmd);
+    void ReleaseRecordedUploads();
+
     /* Per-frame hook: advance every registered video-tex by `dt_seconds`,
      * pull as many decoded frames as needed to catch up to wall PTS,
      * convert NV12→RGBA on the CPU, and upload to the slot's stable
@@ -423,6 +430,19 @@ private:
      * sr.vulkan module interface. */
     struct VideoRegistry;
     std::unique_ptr<VideoRegistry> m_video_registry;
+
+    struct PendingImageUpload {
+        ImageParameters image;
+        VkBuffer        buffer { VK_NULL_HANDLE };
+        VkDeviceSize    buffer_offset { 0 };
+        VkOffset3D      image_offset { 0, 0, 0 };
+        VkExtent3D      image_extent { 0, 0, 1 };
+        VkImageLayout   old_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkImageLayout   final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VmaBufferParameters owned_stage;
+    };
+    std::vector<PendingImageUpload> m_pending_uploads;
+    std::vector<PendingImageUpload> m_recorded_uploads;
 
     struct QueryTex {
         idx                index { 0 };
@@ -545,6 +565,11 @@ private:
 
 class StagingBuffer : NoCopy, NoMove {
 public:
+    struct DirtyRange {
+        VkDeviceSize offset { 0 };
+        VkDeviceSize size { 0 };
+    };
+
     StagingBuffer(const Device&, VkDeviceSize size, VkBufferUsageFlags);
     ~StagingBuffer();
 
@@ -572,6 +597,7 @@ private:
     VkResult      mapStageBuf();
     VirtualBlock* newVirtualBlock(VkDeviceSize);
     bool          increaseBuf(VkDeviceSize);
+    void          markDirty(VkDeviceSize offset, VkDeviceSize size);
 
     const Device& m_device;
     VkDeviceSize  m_size_step;
@@ -583,6 +609,7 @@ private:
 
     VmaBufferParameters m_stage_buf;
     VmaBufferParameters m_gpu_buf;
+    std::vector<DirtyRange> m_dirty_ranges;
 };
 
 // ---------- MeshCache.hpp ----------

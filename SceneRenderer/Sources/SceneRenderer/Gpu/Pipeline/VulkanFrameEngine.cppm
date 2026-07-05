@@ -64,6 +64,7 @@ public:
     void drawFrame(Scene&);
 
     void clearLastRenderGraph();
+    void clearTransientRenderGraphResources();
     void compileRenderGraph(Scene&, rg::RenderGraph&);
     // Free unreferenced MeshCache entries. Call when the scene set changes
     // (RenderSetScene); skip for swapchain-only rebuilds where the same
