@@ -1,0 +1,298 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
+import SwiftUI
+
+struct WallpaperRuntimeState: Codable, Equatable {
+    var volume: Float = 1.0
+    var speed: Float = 1.0
+    var muted: Bool = false
+    var fillMode: FillMode = .cover
+    var propertyOverrides: [String: WEPropertyValue] = [:]
+}
+
+class WallpaperViewModel: ObservableObject {
+    let renderer = RendererController()
+
+    static var invalidWallpaper: WEWallpaper {
+        WEWallpaper(using: .invalid,
+                    where: Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")
+                        ?? URL(fileURLWithPath: "/dev/null"))
+    }
+
+    @Published var nextCurrentWallpaper: WEWallpaper = WallpaperViewModel.invalidWallpaper {
+        willSet {
+            if newValue.kind == .web, !isTrusted(newValue) {
+                AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(which: newValue)
+            } else {
+                self.currentWallpaper = newValue
+            }
+        }
+    }
+
+    @Published var currentWallpaper: WEWallpaper {
+        didSet {
+            UserDefaults.standard.set(try? JSONEncoder().encode(currentWallpaper), forKey: "CurrentWallpaper")
+            applyCurrent()
+        }
+    }
+
+    @Published var runtime = WallpaperRuntimeState()
+
+    // 避免运行时回填 UI 时重复下发指令。
+    private var suppressPlaybackSideEffects = false
+
+    var lastPlayRate: Float = 1.0
+    @Published var playRate: Float = 1.0 {
+        willSet { syncStatusPauseItem(isPaused: newValue == 0.0) }
+        didSet {
+            lastPlayRate = oldValue
+            guard !suppressPlaybackSideEffects else { return }
+            runtime.speed = playRate
+            if playRate == 0 { renderer.pause() } else { renderer.resume(); renderer.setSpeed(playRate) }
+            saveRuntime()
+        }
+    }
+
+    var lastPlayVolume: Float = 1.0
+    @Published var playVolume: Float = 1.0 {
+        willSet { syncStatusMuteItem(isMuted: newValue == 0.0) }
+        didSet {
+            lastPlayVolume = oldValue
+            guard !suppressPlaybackSideEffects else { return }
+            runtime.volume = playVolume
+            renderer.setVolume(playVolume * masterVolume)
+            renderer.setMuted(playVolume == 0 || globalMuted)
+            saveRuntime()
+        }
+    }
+
+    init() {
+        if let json = UserDefaults.standard.data(forKey: "CurrentWallpaper"),
+           let wallpaper = try? JSONDecoder().decode(WEWallpaper.self, from: json),
+           FileManager.default.fileExists(atPath: wallpaper.wallpaperDirectory.path) {
+            currentWallpaper = wallpaper
+        } else {
+            currentWallpaper = WallpaperViewModel.invalidWallpaper
+        }
+    }
+
+    // MARK: 全局设置桥接
+
+    private var masterVolume: Float {
+        Float(AppDelegate.shared.globalSettingsViewModel.settings.masterVolume)
+    }
+    private var globalMuted: Bool {
+        AppDelegate.shared.globalSettingsViewModel.settings.globalMuted
+    }
+    private var globalFps: Int {
+        Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+    }
+    private var enableSpectrum: Bool {
+        AppDelegate.shared.globalSettingsViewModel.settings.enableSpectrum
+    }
+
+    // MARK: 信任（网页壁纸安全确认）
+
+    func isTrusted(_ w: WEWallpaper) -> Bool {
+        let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
+        return list.contains(w.id)
+    }
+
+    func trust(_ w: WEWallpaper) {
+        var list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
+        if !list.contains(w.id) { list.append(w.id) }
+        UserDefaults.standard.set(list, forKey: "TrustedWallpapers")
+    }
+
+    func trustAndApply(_ w: WEWallpaper) {
+        trust(w)
+        currentWallpaper = w
+    }
+
+    // MARK: 运行时状态持久化
+
+    private func runtimeKey(for w: WEWallpaper) -> String { "Runtime_\(w.id)" }
+
+    func loadRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
+        if let data = UserDefaults.standard.data(forKey: runtimeKey(for: w)),
+           let s = try? JSONDecoder().decode(WallpaperRuntimeState.self, from: data) {
+            return s
+        }
+        return WallpaperRuntimeState()
+    }
+
+    func saveRuntime() {
+        guard currentWallpaper.isValid,
+              let data = try? JSONEncoder().encode(runtime) else { return }
+        UserDefaults.standard.set(data, forKey: runtimeKey(for: currentWallpaper))
+    }
+
+    // MARK: 属性合并
+
+    func effectiveProperties(for w: WEWallpaper) -> [String: WEProjectProperty] {
+        var result = w.project.general?.properties?.items ?? [:]
+        for (key, override) in runtime.propertyOverrides {
+            if var prop = result[key] {
+                prop.value = override
+                result[key] = prop
+            }
+        }
+        return result
+    }
+
+    private func makeRenderOptions(for w: WEWallpaper) -> RenderOptions {
+        var opts = RenderOptions()
+        opts.fps = globalFps
+        opts.enableSpectrum = enableSpectrum
+        opts.muted = runtime.muted || globalMuted || runtime.volume == 0
+        opts.volume = runtime.volume * masterVolume
+        opts.speed = runtime.speed
+        opts.fillMode = runtime.fillMode
+        opts.userProperties = effectiveProperties(for: w)
+        return opts
+    }
+
+    // MARK: 应用壁纸
+
+    private func applyCurrent() {
+        let w = currentWallpaper
+        guard w.isValid, w.kind != .unsupported else {
+            renderer.stopAll()
+            return
+        }
+        runtime = loadRuntime(for: w)
+        suppressPlaybackSideEffects = true
+        playVolume = runtime.volume
+        playRate = runtime.speed
+        suppressPlaybackSideEffects = false
+        let opts = makeRenderOptions(for: w)
+        renderer.render(w, on: 0, options: opts)
+        AppDelegate.shared.setPlaceholderWallpaper(with: w)
+    }
+
+    func reapplyCurrent() {
+        let w = currentWallpaper
+        guard w.isValid else { return }
+        renderer.render(w, on: 0, options: makeRenderOptions(for: w))
+    }
+
+    func applyToAllScreens() {
+        let w = currentWallpaper
+        guard w.isValid, w.kind != .unsupported else { return }
+        let count = NSScreen.screens.count
+        currentWallpaper = w
+        for screen in 1..<max(count, 1) {
+            var opts = makeRenderOptions(for: w)
+            opts.volume = runtime.volume * Float(masterVolume)
+            opts.muted = runtime.muted || globalMuted
+            opts.speed = runtime.speed
+            opts.fillMode = runtime.fillMode
+            renderer.render(w, on: screen, options: opts)
+        }
+    }
+
+    func stopWallpaper() {
+        renderer.stopAll()
+        currentWallpaper = WallpaperViewModel.invalidWallpaper
+    }
+
+    func applyOnScreen(_ w: WEWallpaper, screen: Int) {
+        guard w.isValid, w.kind != .unsupported else { return }
+        if screen == 0 {
+            currentWallpaper = w
+        } else {
+            let saved = loadRuntime(for: w)
+            var opts = makeRenderOptions(for: w)
+            opts.volume = saved.volume * Float(masterVolume)
+            opts.muted = saved.muted || globalMuted
+            opts.speed = saved.speed
+            opts.fillMode = saved.fillMode
+            renderer.render(w, on: screen, options: opts)
+        }
+    }
+
+    // MARK: 属性实时下发
+
+    private var scenePropertyReloadTimer: Timer?
+
+    func setProperty(key: String, value: WEPropertyValue) {
+        guard var prop = currentWallpaper.project.general?.properties?.items[key] else { return }
+        prop.value = value
+        runtime.propertyOverrides[key] = value
+        saveRuntime()
+
+        switch currentWallpaper.kind {
+        case .web:
+            renderer.setProperty(key: key, property: prop)
+        case .scene:
+            // bool/combo 需要重启场景进程才能稳定生效。
+            renderer.setProperty(key: key, property: prop)
+            if prop.propertyType == .bool || prop.propertyType == .combo {
+                scheduleSceneReload()
+            }
+        case .video, .unsupported:
+            break
+        }
+    }
+
+    private func scheduleSceneReload() {
+        scenePropertyReloadTimer?.invalidate()
+        scenePropertyReloadTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            self?.reapplyCurrent()
+        }
+    }
+
+    func setFillMode(_ mode: FillMode) {
+        runtime.fillMode = mode
+        renderer.setFillMode(mode)
+        saveRuntime()
+    }
+
+    func resetProperties() {
+        scenePropertyReloadTimer?.invalidate()
+        runtime = WallpaperRuntimeState()
+        saveRuntime()
+        suppressPlaybackSideEffects = true
+        playVolume = runtime.volume
+        playRate = runtime.speed
+        suppressPlaybackSideEffects = false
+        reapplyCurrent()
+    }
+
+    func reapplyVolume() {
+        renderer.setVolume(runtime.volume * masterVolume)
+        renderer.setMuted(runtime.muted || globalMuted || runtime.volume == 0)
+    }
+
+    // MARK: 状态栏菜单项文字同步（保留原 UI 行为）
+
+    private func syncStatusPauseItem(isPaused: Bool) {
+        guard let menu = AppDelegate.shared.statusItem?.menu else { return }
+        for (i, item) in menu.items.enumerated() {
+            if isPaused, item.title == "暂停" {
+                menu.items[i] = .init(title: "继续", systemImage: "play.fill",
+                                      action: #selector(AppDelegate.resume), keyEquivalent: "")
+            } else if !isPaused, item.title == "继续" {
+                menu.items[i] = .init(title: "暂停", systemImage: "pause.fill",
+                                      action: #selector(AppDelegate.pause), keyEquivalent: "")
+            }
+        }
+    }
+
+    private func syncStatusMuteItem(isMuted: Bool) {
+        guard let menu = AppDelegate.shared.statusItem?.menu else { return }
+        for (i, item) in menu.items.enumerated() {
+            if isMuted, item.title == "静音" {
+                menu.items[i] = .init(title: "取消静音", systemImage: "speaker.fill",
+                                      action: #selector(AppDelegate.unmute), keyEquivalent: "")
+            } else if !isMuted, item.title == "取消静音" {
+                menu.items[i] = .init(title: "静音", systemImage: "speaker.slash.fill",
+                                      action: #selector(AppDelegate.mute), keyEquivalent: "")
+            }
+        }
+    }
+}
