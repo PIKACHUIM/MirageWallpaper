@@ -169,6 +169,39 @@ AVBufferRef* make_vaapi_hwdevice(const std::string& render_node, Error* err) {
 }
 #endif
 
+#if defined(__APPLE__)
+AVPixelFormat get_format_prefer_videotoolbox(AVCodecContext* cctx,
+                                             const AVPixelFormat* fmts) {
+    for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p) {
+        if (*p == AV_PIX_FMT_VIDEOTOOLBOX) return AV_PIX_FMT_VIDEOTOOLBOX;
+    }
+    return avcodec_default_get_format(cctx, fmts);
+}
+
+AVBufferRef* make_videotoolbox_hwdevice(Error* err) {
+    AVBufferRef* hwd = nullptr;
+    int rc = av_hwdevice_ctx_create(&hwd, AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                    nullptr, nullptr, 0);
+    if (rc < 0 || !hwd) {
+        fail(err, "av_hwdevice_ctx_create(VIDEOTOOLBOX): " + av_err_str(rc));
+        if (hwd) av_buffer_unref(&hwd);
+        return nullptr;
+    }
+    return hwd;
+}
+#endif
+
+const char* hwaccel_label(HwAccel accel) {
+    switch (accel) {
+    case HwAccel::Auto: return "auto";
+    case HwAccel::Vulkan: return "vulkan";
+    case HwAccel::Vaapi: return "vaapi";
+    case HwAccel::VideoToolbox: return "videotoolbox";
+    case HwAccel::None: return "none";
+    }
+    return "?";
+}
+
 /* Build an AV_HWDEVICE_TYPE_VULKAN context wrapping the caller's
  * Producer-owned VkInstance/VkDevice. Returns a populated AVBufferRef
  * on success, or null + populated *err on any failure. */
@@ -225,6 +258,19 @@ std::string av_err_str(int rc) {
     return std::string(buf);
 }
 
+double rational_to_double(AVRational r) {
+    if (r.num <= 0 || r.den <= 0) return 0.0;
+    return static_cast<double>(r.num) / static_cast<double>(r.den);
+}
+
+double frame_duration_from_stream(const AVStream* st) {
+    if (!st) return 1.0 / 30.0;
+    double fps = rational_to_double(st->avg_frame_rate);
+    if (fps <= 0.0 || fps > 240.0) fps = rational_to_double(st->r_frame_rate);
+    if (fps <= 0.0 || fps > 240.0) return 1.0 / 30.0;
+    return 1.0 / fps;
+}
+
 } // namespace
 
 struct VideoDecoder::State {
@@ -274,21 +320,78 @@ struct VideoDecoder::State {
 namespace {
 
 bool ensure_sws(VideoDecoder::State& st, int src_w, int src_h, AVPixelFormat src_fmt,
-                uint32_t target_w, uint32_t target_h) {
+                uint32_t target_w, uint32_t target_h, int flags) {
     if (st.sws && st.sws_src_w == src_w && st.sws_src_h == src_h
         && st.sws_src_fmt == src_fmt) {
         return true;
     }
-    /* Always emit NV12 — that's what YuvToRgba consumes. */
     st.sws.reset(sws_getContext(src_w, src_h, src_fmt,
                                 static_cast<int>(target_w),
                                 static_cast<int>(target_h),
                                 AV_PIX_FMT_NV12,
-                                SWS_BICUBIC, nullptr, nullptr, nullptr));
+                                flags, nullptr, nullptr, nullptr));
     if (!st.sws) return false;
     st.sws_src_w = src_w;
     st.sws_src_h = src_h;
     st.sws_src_fmt = src_fmt;
+    return true;
+}
+
+bool transfer_hw_frame_if_needed(VideoDecoder::State& st, AVFrame*& feed, Error* err) {
+    const bool needs_hw_transfer =
+        feed->format == AV_PIX_FMT_VULKAN
+#if defined(__APPLE__)
+        || feed->format == AV_PIX_FMT_VIDEOTOOLBOX
+#endif
+        ;
+    if (! needs_hw_transfer) return true;
+
+    if (!st.sw_frame) st.sw_frame.reset(av_frame_alloc());
+    if (!st.sw_frame) {
+        fail(err, "av_frame_alloc(sw_frame) failed");
+        return false;
+    }
+    av_frame_unref(st.sw_frame.get());
+    int trc = av_hwframe_transfer_data(st.sw_frame.get(), feed, 0);
+    if (trc < 0) {
+        fail(err, "av_hwframe_transfer_data: " + av_err_str(trc));
+        av_frame_unref(st.src_frame.get());
+        return false;
+    }
+
+    st.sw_frame->pts                   = feed->pts;
+    st.sw_frame->best_effort_timestamp = feed->best_effort_timestamp;
+    feed = st.sw_frame.get();
+    return true;
+}
+
+bool copy_nv12_same_size(const AVFrame* feed, uint32_t target_w, uint32_t target_h,
+                         Nv12Frame& out) {
+    if (!feed || feed->format != AV_PIX_FMT_NV12) return false;
+    if (feed->width != static_cast<int>(target_w) ||
+        feed->height != static_cast<int>(target_h)) {
+        return false;
+    }
+    if (!feed->data[0] || !feed->data[1]) return false;
+    if (feed->linesize[0] < static_cast<int>(target_w) ||
+        feed->linesize[1] < static_cast<int>(target_w)) {
+        return false;
+    }
+
+    auto* y_dst  = out.data.data();
+    auto* uv_dst = out.data.data() + size_t(target_w) * target_h;
+    const size_t y_pitch  = target_w;
+    const size_t uv_pitch = target_w;
+    for (uint32_t row = 0; row < target_h; ++row) {
+        std::memcpy(y_dst + size_t(row) * y_pitch,
+                    feed->data[0] + size_t(row) * feed->linesize[0],
+                    y_pitch);
+    }
+    for (uint32_t row = 0; row < target_h / 2; ++row) {
+        std::memcpy(uv_dst + size_t(row) * uv_pitch,
+                    feed->data[1] + size_t(row) * feed->linesize[1],
+                    uv_pitch);
+    }
     return true;
 }
 
@@ -378,14 +481,39 @@ auto VideoDecoder::open_with_vk(const std::string& path,
                                 const Producer& vk,
                                 const OpenOpts& opts)
     -> rstd::Result<std::unique_ptr<VideoDecoder>, Error> {
-    /* Resolve trial order. Auto = Vulkan first, then VAAPI; explicit
-     * single-mode skips the others; None goes straight to sw. */
+#if defined(__APPLE__)
+    if (opts.hwaccel == HwAccel::Auto || opts.hwaccel == HwAccel::VideoToolbox) {
+        Error        local_err;
+        AVBufferRef* hwd = make_videotoolbox_hwdevice(&local_err);
+        if (hwd) {
+            Error err;
+            auto  p = build_internal(InputSpec { path, nullptr },
+                                     target_w, target_h, loop,
+                                     hwd, FrameKind::VideoToolboxSw, &err);
+            if (p) return rstd::Ok(std::move(p));
+            rstd::log::info(
+                "VideoDecoder: hwaccel videotoolbox build_internal failed: {} — trying fallback",
+                err.message.c_str());
+        } else {
+            rstd::log::info("VideoDecoder: hwaccel attempt videotoolbox skipped: {}",
+                            local_err.message.c_str());
+        }
+    }
+#endif
+
+    /* Resolve trial order. Auto = Vulkan first, then VAAPI off Apple;
+     * explicit single-mode skips the others; None goes straight to sw. */
     HwAccel order[2] = { HwAccel::None, HwAccel::None };
     int     n_order  = 0;
     switch (opts.hwaccel) {
+#if defined(__APPLE__)
+    case HwAccel::Auto:   n_order = 0; break;
+#else
     case HwAccel::Auto:   order[0] = HwAccel::Vulkan; order[1] = HwAccel::Vaapi; n_order = 2; break;
+#endif
     case HwAccel::Vulkan: order[0] = HwAccel::Vulkan; n_order = 1; break;
     case HwAccel::Vaapi:  order[0] = HwAccel::Vaapi;  n_order = 1; break;
+    case HwAccel::VideoToolbox: n_order = 0; break;
     case HwAccel::None:   n_order = 0; break;
     }
 
@@ -406,7 +534,7 @@ auto VideoDecoder::open_with_vk(const std::string& path,
         }
         if (!hwd) {
             rstd::log::info("VideoDecoder: hwaccel attempt {} skipped: {}",
-                            order[i] == HwAccel::Vulkan ? "vulkan" : "vaapi",
+                            hwaccel_label(order[i]),
                             local_err.message.c_str());
             continue;
         }
@@ -415,7 +543,7 @@ auto VideoDecoder::open_with_vk(const std::string& path,
                                  target_w, target_h, loop, hwd, kind, &err);
         if (p) return rstd::Ok(std::move(p));
         rstd::log::info("VideoDecoder: hwaccel {} build_internal failed: {} — trying next",
-                        order[i] == HwAccel::Vulkan ? "vulkan" : "vaapi",
+                        hwaccel_label(order[i]),
                         err.message.c_str());
         /* build_internal already unref'd `hwd` on failure via state. */
     }
@@ -443,6 +571,31 @@ auto VideoDecoder::open_from_stream(InputStreamFactory make_stream,
         return s;
     };
 
+#if defined(__APPLE__)
+    if (opts.hwaccel == HwAccel::Auto || opts.hwaccel == HwAccel::VideoToolbox) {
+        Error        local_err;
+        AVBufferRef* hwd = make_videotoolbox_hwdevice(&local_err);
+        if (hwd) {
+            Error err;
+            auto  s = fresh_stream(&err);
+            if (!s) {
+                av_buffer_unref(&hwd);
+                return rstd::Err(std::move(err));
+            }
+            auto p = build_internal(InputSpec { {}, std::move(s) },
+                                    target_w, target_h, loop,
+                                    hwd, FrameKind::VideoToolboxSw, &err);
+            if (p) return rstd::Ok(std::move(p));
+            rstd::log::info(
+                "VideoDecoder: hwaccel videotoolbox build_internal failed: {} — trying fallback",
+                err.message.c_str());
+        } else {
+            rstd::log::info("VideoDecoder: hwaccel attempt videotoolbox skipped: {}",
+                            local_err.message.c_str());
+        }
+    }
+#endif
+
     /* Sw / vaapi-only fast path (no shared Vulkan hwdev). */
     if (!vk) {
         Error err;
@@ -462,9 +615,14 @@ auto VideoDecoder::open_from_stream(InputStreamFactory make_stream,
     HwAccel order[2] = { HwAccel::None, HwAccel::None };
     int     n_order  = 0;
     switch (opts.hwaccel) {
+#if defined(__APPLE__)
+    case HwAccel::Auto:   n_order = 0; break;
+#else
     case HwAccel::Auto:   order[0] = HwAccel::Vulkan; order[1] = HwAccel::Vaapi; n_order = 2; break;
+#endif
     case HwAccel::Vulkan: order[0] = HwAccel::Vulkan; n_order = 1; break;
     case HwAccel::Vaapi:  order[0] = HwAccel::Vaapi;  n_order = 1; break;
+    case HwAccel::VideoToolbox: n_order = 0; break;
     case HwAccel::None:   n_order = 0; break;
     }
 
@@ -485,7 +643,7 @@ auto VideoDecoder::open_from_stream(InputStreamFactory make_stream,
         }
         if (!hwd) {
             rstd::log::info("VideoDecoder: hwaccel attempt {} skipped: {}",
-                            order[i] == HwAccel::Vulkan ? "vulkan" : "vaapi",
+                            hwaccel_label(order[i]),
                             local_err.message.c_str());
             continue;
         }
@@ -499,7 +657,7 @@ auto VideoDecoder::open_from_stream(InputStreamFactory make_stream,
                                  target_w, target_h, loop, hwd, kind, &err);
         if (p) return rstd::Ok(std::move(p));
         rstd::log::info("VideoDecoder: hwaccel {} build_internal failed: {} — trying next",
-                        order[i] == HwAccel::Vulkan ? "vulkan" : "vaapi",
+                        hwaccel_label(order[i]),
                         err.message.c_str());
         /* build_internal already unref'd `hwd` via State on failure. */
     }
@@ -606,6 +764,7 @@ VideoDecoder::build_internal(InputSpec input,
     AVStream*           st  = self->st_->fmt->streams[idx];
     AVCodecParameters*  par = st->codecpar;
     self->st_->stream_tb = st->time_base;
+    self->frame_duration_seconds_ = frame_duration_from_stream(st);
 
     /* FFmpeg's native `av1` decoder has no software path — it's a
      * parser + hwaccel dispatcher and returns ENOSYS on send_packet when
@@ -650,6 +809,14 @@ VideoDecoder::build_internal(InputSpec input,
                 avcodec_get_name(par->codec_id));
         }
 #endif
+#if defined(__APPLE__)
+        else if (requested_kind == FrameKind::VideoToolboxSw) {
+            self->st_->cctx->get_format = get_format_prefer_videotoolbox;
+            rstd::log::info(
+                "VideoDecoder: AV_HWDEVICE_TYPE_VIDEOTOOLBOX attached for codec {}.",
+                avcodec_get_name(par->codec_id));
+        }
+#endif
     } else {
         rstd::log::info(
             "VideoDecoder: sw decode for codec {}.",
@@ -688,10 +855,19 @@ VideoDecoder::build_internal(InputSpec input,
     if (requested_kind == FrameKind::VulkanShared) {
         want_pix_fmt = AV_PIX_FMT_VULKAN;
         hw_label     = "vulkan";
-    } else if (requested_kind == FrameKind::VaapiDrm) {
+    }
+#if defined(WAVSEN_HAS_VAAPI)
+    else if (requested_kind == FrameKind::VaapiDrm) {
         want_pix_fmt = AV_PIX_FMT_VAAPI;
         hw_label     = "vaapi";
     }
+#endif
+#if defined(__APPLE__)
+    else if (requested_kind == FrameKind::VideoToolboxSw) {
+        want_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
+        hw_label     = "videotoolbox";
+    }
+#endif
     if (want_pix_fmt != AV_PIX_FMT_NONE) {
         AVPacket* probe = av_packet_alloc();
         if (probe) {
@@ -950,30 +1126,13 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
     while (true) {
         int rc = avcodec_receive_frame(st.cctx.get(), st.src_frame.get());
         if (rc == 0) {
-            /* If the decoder produced a vulkan-typed frame (Iter 4 hw
-             * path), download it to a sw frame first. The download lands
-             * in whatever YUV format the AVHWFramesContext exposes —
-             * typically NV12 — and swscale handles whatever it is. */
+            /* If the decoder produced a hwaccel frame, download it to a
+             * sw frame first. Vulkan is used by the upstream Linux path;
+             * VideoToolbox is the macOS path. The download lands in
+             * whatever YUV format the AVHWFramesContext exposes, and
+             * swscale handles the final NV12 resize/format step. */
             AVFrame* feed = st.src_frame.get();
-            if (feed->format == AV_PIX_FMT_VULKAN) {
-                if (!st.sw_frame) st.sw_frame.reset(av_frame_alloc());
-                if (!st.sw_frame) {
-                    fail(err, "av_frame_alloc(sw_frame) failed");
-                    return -1;
-                }
-                av_frame_unref(st.sw_frame.get());
-                int trc = av_hwframe_transfer_data(st.sw_frame.get(), feed, 0);
-                if (trc < 0) {
-                    fail(err, "av_hwframe_transfer_data: " + av_err_str(trc));
-                    av_frame_unref(st.src_frame.get());
-                    return -1;
-                }
-                /* Preserve PTS across the transfer (transfer_data copies
-                 * pixel data only). */
-                st.sw_frame->pts                    = feed->pts;
-                st.sw_frame->best_effort_timestamp  = feed->best_effort_timestamp;
-                feed = st.sw_frame.get();
-            }
+            if (! transfer_hw_frame_if_needed(st, feed, err)) return -1;
 
             const auto src_fmt = static_cast<AVPixelFormat>(feed->format);
             const int  src_w   = feed->width;
@@ -982,23 +1141,29 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
                 fail(err, "decoded frame has invalid dimensions/format");
                 return -1;
             }
-            if (!ensure_sws(st, src_w, src_h, src_fmt, target_w_, target_h_)) {
-                fail(err, std::string("sws_getContext failed (src=") +
-                          av_get_pix_fmt_name(src_fmt) + ")");
-                return -1;
-            }
-            uint8_t* y_dst  = out.data.data();
-            uint8_t* uv_dst = out.data.data() + size_t(target_w_) * target_h_;
-            uint8_t* dst_planes[4]  = { y_dst, uv_dst, nullptr, nullptr };
-            int      dst_strides[4] = { static_cast<int>(target_w_),
-                                        static_cast<int>(target_w_),  /* NV12 UV pitch == width */
-                                        0, 0 };
-            int scaled = sws_scale(st.sws.get(),
-                                   feed->data, feed->linesize,
-                                   0, src_h, dst_planes, dst_strides);
-            if (scaled <= 0) {
-                fail(err, "sws_scale produced no rows");
-                return -1;
+            if (!copy_nv12_same_size(feed, target_w_, target_h_, out)) {
+                if (!ensure_sws(st, src_w, src_h, src_fmt, target_w_, target_h_,
+                                SWS_BILINEAR)) {
+                    fail(err, std::string("sws_getContext failed (src=") +
+                              av_get_pix_fmt_name(src_fmt) + ")");
+                    return -1;
+                }
+                uint8_t* y_dst  = out.data.data();
+                uint8_t* uv_dst = out.data.data() + size_t(target_w_) * target_h_;
+                uint8_t* dst_planes[4]  = { y_dst, uv_dst, nullptr, nullptr };
+                int      dst_strides[4] = {
+                    static_cast<int>(target_w_),
+                    static_cast<int>(target_w_),  /* NV12 UV pitch == width */
+                    0,
+                    0,
+                };
+                int scaled = sws_scale(st.sws.get(),
+                                       feed->data, feed->linesize,
+                                       0, src_h, dst_planes, dst_strides);
+                if (scaled <= 0) {
+                    fail(err, "sws_scale produced no rows");
+                    return -1;
+                }
             }
             const int64_t pts = (feed->best_effort_timestamp != AV_NOPTS_VALUE)
                 ? feed->best_effort_timestamp

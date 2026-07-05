@@ -54,13 +54,14 @@ struct VkFrameView {
     std::uint32_t  bit_depth   { 8 };
 };
 
-// User selection for the hwaccel chain. Auto resolves to [Vulkan, Vaapi]
-// (then sw decode if both fail).
+// User selection for the hwaccel chain. Auto resolves to VideoToolbox on
+// Apple, otherwise [Vulkan, Vaapi] (then sw decode if all fail).
 enum class HwAccel {
-    Auto    = 0,
-    Vulkan  = 1,
-    Vaapi   = 2,
-    None    = 3,
+    Auto         = 0,
+    Vulkan       = 1,
+    Vaapi        = 2,
+    VideoToolbox = 3,
+    None         = 4,
 };
 
 struct OpenOpts {
@@ -91,11 +92,12 @@ struct IInputStream {
 using InputStreamFactory = std::function<std::unique_ptr<IInputStream>()>;
 
 // Which pump method the caller should drive for the next frame. Each
-// frame is decoded into exactly one of the three concrete views.
+// frame is decoded into exactly one of the concrete views / transfers.
 enum class FrameKind {
-    Sw          = 0,  // call next_frame(Nv12Frame&)
-    VulkanShared = 1, // call next_vk_frame(VkFrameView&)
-    VaapiDrm    = 2,  // call next_drm_frame(DrmFrameView&)
+    Sw             = 0, // call next_frame(Nv12Frame&)
+    VulkanShared   = 1, // call next_vk_frame(VkFrameView&)
+    VaapiDrm       = 2, // call next_drm_frame(DrmFrameView&)
+    VideoToolboxSw = 3, // call next_frame(Nv12Frame&); hw decode, sw transfer
 };
 
 // Mirror of one AVDRMPlaneDescriptor entry — which `object_index` of
@@ -189,6 +191,7 @@ public:
     // legacy boolean accessor — true iff kind() == VulkanShared.
     FrameKind kind() const           { return kind_; }
     bool      using_vk_frames() const { return kind_ == FrameKind::VulkanShared; }
+    double    frame_duration_seconds() const { return frame_duration_seconds_; }
 
     auto next_vk_frame(VkFrameView& out) -> rstd::Result<NextFrame, Error>;
     auto next_drm_frame(DrmFrameView& out) -> rstd::Result<NextFrame, Error>;
@@ -232,6 +235,7 @@ private:
     std::uint32_t target_h_ { 0 };
     bool          loop_     { false };
     FrameKind     kind_     { FrameKind::Sw };
+    double        frame_duration_seconds_ { 1.0 / 30.0 };
 };
 
 } // namespace wavsen::video

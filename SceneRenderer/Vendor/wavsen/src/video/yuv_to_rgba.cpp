@@ -295,9 +295,6 @@ bool YuvToRgba::init(VkInstance instance, VkPhysicalDevice phys, VkDevice device
     vkGetSemaphoreFdKHR_ =
         reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
             vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
-    if (!vkGetSemaphoreFdKHR_) {
-        return fail(err, "vkGetSemaphoreFdKHR missing");
-    }
     /* Optional: only the convert_drm_prime path needs it; null-check at
      * call site so devices without the extension still run sw / vulkan. */
     vkGetMemoryFdPropertiesKHR_ =
@@ -477,15 +474,18 @@ bool YuvToRgba::init(VkInstance instance, VkPhysicalDevice phys, VkDevice device
         if (VkResult r = vkCreateFence(device_, &fci, nullptr, &done_fence_); r != VK_SUCCESS)
             return fail(err, std::string("vkCreateFence: ") + vk_result_str(r));
 
-        VkExportSemaphoreCreateInfo es {};
-        es.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
-        es.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
         VkSemaphoreCreateInfo sci {};
         sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        sci.pNext = &es;
+        VkExportSemaphoreCreateInfo es {};
+        if (vkGetSemaphoreFdKHR_) {
+            es.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+            es.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+            sci.pNext      = &es;
+        }
         if (VkResult r = vkCreateSemaphore(device_, &sci, nullptr, &signal_sem_);
-            r != VK_SUCCESS)
+            r != VK_SUCCESS) {
             return fail(err, std::string("vkCreateSemaphore(signal): ") + vk_result_str(r));
+        }
     }
 
     // Bindings 0/1 are stable across frames — write them once.
@@ -675,12 +675,23 @@ int YuvToRgba::convert_nv12_(VkImage             dst,
     const uint32_t gy = (dst_h + 7) / 8;
     vkCmdDispatch(cmd_, gx, gy, 1);
 
-    /* dst: GENERAL → GENERAL (release to FOREIGN, matches bridge contract). */
-    barrier_image(cmd_, dst,
-                  VK_ACCESS_SHADER_WRITE_BIT, 0,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                  queue_family_, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    if (vkGetSemaphoreFdKHR_) {
+        /* External bridge path: release to FOREIGN and export a sync fd. */
+        barrier_image(cmd_, dst,
+                      VK_ACCESS_SHADER_WRITE_BIT, 0,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                      queue_family_, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    } else {
+        /* In-process SceneRenderer path (macOS/MoltenVK): the following
+         * render submit is on the same queue, so queue order is enough.
+         * Leave the texture directly sampleable for the material pass. */
+        barrier_image(cmd_, dst,
+                      VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    }
 
     if (VkResult r = vkEndCommandBuffer(cmd_); r != VK_SUCCESS) {
         fail(err, std::string("vkEndCommandBuffer: ") + vk_result_str(r));
@@ -692,8 +703,10 @@ int YuvToRgba::convert_nv12_(VkImage             dst,
     si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount   = 1;
     si.pCommandBuffers      = &cmd_;
-    si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores    = &signal_sem_;
+    if (vkGetSemaphoreFdKHR_ && signal_sem_ != VK_NULL_HANDLE) {
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = &signal_sem_;
+    }
     if (VkResult r = vkQueueSubmit(queue_, 1, &si, done_fence_); r != VK_SUCCESS) {
         fail(err, std::string("vkQueueSubmit: ") + vk_result_str(r));
         vkDestroyImageView(device_, dst_view, nullptr);
@@ -702,15 +715,17 @@ int YuvToRgba::convert_nv12_(VkImage             dst,
     fence_pending_ = true;
 
     /* Export sync_fd. */
-    VkSemaphoreGetFdInfoKHR sgfi {};
-    sgfi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
-    sgfi.semaphore  = signal_sem_;
-    sgfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int sync_fd = -1;
-    if (VkResult r = vkGetSemaphoreFdKHR_(device_, &sgfi, &sync_fd); r != VK_SUCCESS) {
-        fail(err, std::string("vkGetSemaphoreFdKHR: ") + vk_result_str(r));
-        vkDestroyImageView(device_, dst_view, nullptr);
-        return -1;
+    if (vkGetSemaphoreFdKHR_ && signal_sem_ != VK_NULL_HANDLE) {
+        VkSemaphoreGetFdInfoKHR sgfi {};
+        sgfi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+        sgfi.semaphore  = signal_sem_;
+        sgfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        if (VkResult r = vkGetSemaphoreFdKHR_(device_, &sgfi, &sync_fd); r != VK_SUCCESS) {
+            fail(err, std::string("vkGetSemaphoreFdKHR: ") + vk_result_str(r));
+            vkDestroyImageView(device_, dst_view, nullptr);
+            return -1;
+        }
     }
 
     /* Schedule dst_view destruction at next fence wait. We avoid a
@@ -1499,7 +1514,7 @@ auto YuvToRgba::convert_nv12(VkImage dst, uint32_t dst_w, uint32_t dst_h,
                              const ColorMatrix& cm) -> rstd::Result<int, Error> {
     Error err;
     int   fd = convert_nv12_(dst, dst_w, dst_h, nv12, nv12_size, cm, &err);
-    if (fd < 0) return rstd::Err(std::move(err));
+    if (fd < 0 && ! err.message.empty()) return rstd::Err(std::move(err));
     return rstd::Ok(fd);
 }
 
