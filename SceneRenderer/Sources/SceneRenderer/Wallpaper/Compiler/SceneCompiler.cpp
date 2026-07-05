@@ -3272,23 +3272,25 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                             ? wpfbo.name + "_" + effaddr
                             : std::string(WE_SPEC_PREFIX) + wpfbo.name + "_" + effaddr;
                     auto fbo_size = [&]() -> std::array<uint16_t, 2> {
+                        const float effect_w = static_cast<float>(layer_w);
+                        const float effect_h = static_cast<float>(layer_h);
                         if (wpfbo.fit > 0) {
-                            const float max_size = std::max(object_w, object_h);
+                            const float max_size = std::max(effect_w, effect_h);
                             if (max_size > 0.0f) {
                                 const float fit_scale = static_cast<float>(wpfbo.fit) / max_size;
                                 return {
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(object_w * fit_scale))),
+                                        std::max(1.0f, std::round(effect_w * fit_scale))),
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(object_h * fit_scale))),
+                                        std::max(1.0f, std::round(effect_h * fit_scale))),
                                 };
                             }
                         }
                         return {
                             static_cast<uint16_t>(
-                                std::max(1.0f, object_w / static_cast<float>(wpfbo.scale))),
+                                std::max(1.0f, effect_w / static_cast<float>(wpfbo.scale))),
                             static_cast<uint16_t>(
-                                std::max(1.0f, object_h / static_cast<float>(wpfbo.scale))),
+                                std::max(1.0f, effect_h / static_cast<float>(wpfbo.scale))),
                         };
                     }();
                     scene.renderTargets[rtname] = { .width      = fbo_size[0],
