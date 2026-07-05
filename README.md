@@ -237,10 +237,10 @@ VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper
 - 大型资源请放入合适的 `assets` 子目录，并注意最终 App 体积。
 
 ## 鸣谢
-[MoltenVK](https://github.com/KhronosGroup/MoltenVK) 提供运行时转译
-[wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) 的UI框架
-[waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) 的粒子系统
-[laobamac/OpenMetalWallpaper](https://github.com/laobamac/OpenMetalWallpaper) 的模型解析
+- [MoltenVK](https://github.com/KhronosGroup/MoltenVK) 提供运行时转译
+- [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) 的UI框架 
+- [waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) 的粒子系统 
+- [laobamac/OpenMetalWallpaper](https://github.com/laobamac/OpenMetalWallpaper) 的模型解析 
 
 ## 许可证
 
