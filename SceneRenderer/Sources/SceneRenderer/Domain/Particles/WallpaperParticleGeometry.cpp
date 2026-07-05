@@ -249,20 +249,23 @@ inline size_t GenRopeParticleData(std::span<const std::unique_ptr<ParticleInstan
     return total;
 }
 
+struct RopeQuadAttrSlots {
+    AttrSlot position;
+    AttrSlot endpoint;
+    AttrSlot cp_start;
+    AttrSlot cp_end4;
+    AttrSlot cp_end3;
+    AttrSlot color2;
+    AttrSlot uv4;
+    AttrSlot uv3;
+    AttrSlot color;
+};
+
 inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail& trail,
                                           const ParticleRawGenSpecOp& specOp, WPGOption opt,
-                                          SceneVertexArray& sv, size_t base_index) {
+                                          const RopeQuadAttrSlots& slots, SceneVertexArray& sv,
+                                          size_t base_index) {
     const auto            one_size = sv.OneSize();
-    const auto            attrs    = sv.GetAttrOffsetMap();
-    const AttrSlot        position = FindAttrSlot(attrs, WE_IN_POSITIONVEC4);
-    const AttrSlot        endpoint = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4);
-    const AttrSlot        cp_start = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C1);
-    const AttrSlot        cp_end4  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C2);
-    const AttrSlot        cp_end3  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC3C2);
-    const AttrSlot        color2   = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C3);
-    const AttrSlot        uv4      = FindAttrSlot(attrs, WE_IN_TEXCOORDC4);
-    const AttrSlot        uv3      = FindAttrSlot(attrs, WE_IN_TEXCOORDC3);
-    const AttrSlot        color    = FindAttrSlot(attrs, WE_IN_COLOR);
     std::array<float, 64> v {};
 
     auto write2 = [&](AttrSlot slot, float x, float y) noexcept {
@@ -303,18 +306,18 @@ inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail
         const float in_ParticleTrailPosition = (float)(j - 1);
         for (usize q = 0; q < uvs.size(); ++q) {
             std::fill(v.begin(), v.begin() + (isize)one_size, 0.0f);
-            write4(position, pre_pos[0], pre_pos[1], pre_pos[2], size);
-            write4(endpoint, cur_pos[0], cur_pos[1], cur_pos[2], in_ParticleTrailLength);
-            write4(cp_start, scp[0], scp[1], scp[2], in_ParticleTrailPosition);
+            write4(slots.position, pre_pos[0], pre_pos[1], pre_pos[2], size);
+            write4(slots.endpoint, cur_pos[0], cur_pos[1], cur_pos[2], in_ParticleTrailLength);
+            write4(slots.cp_start, scp[0], scp[1], scp[2], in_ParticleTrailPosition);
             if (opt.thick_format) {
-                write4(cp_end4, ecp[0], ecp[1], ecp[2], size);
-                write4(color2, p.color[0], p.color[1], p.color[2], p.alpha);
-                write2(uv4, uvs[q][0], uvs[q][1]);
+                write4(slots.cp_end4, ecp[0], ecp[1], ecp[2], size);
+                write4(slots.color2, p.color[0], p.color[1], p.color[2], p.alpha);
+                write2(slots.uv4, uvs[q][0], uvs[q][1]);
             } else {
-                write4(cp_end3, ecp[0], ecp[1], ecp[2], 0.0f);
-                write2(uv3, uvs[q][0], uvs[q][1]);
+                write4(slots.cp_end3, ecp[0], ecp[1], ecp[2], 0.0f);
+                write2(slots.uv3, uvs[q][0], uvs[q][1]);
             }
-            write4(color, p.color[0], p.color[1], p.color[2], p.alpha);
+            write4(slots.color, p.color[0], p.color[1], p.color[2], p.alpha);
             sv.SetVertexs((base_index + emitted) * 4 + q, { v.data(), one_size });
         }
         emitted++;
@@ -325,6 +328,18 @@ inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail
 inline size_t GenRopeParticleQuadData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                       const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                       SceneVertexArray& sv) {
+    const auto attrs = sv.GetAttrOffsetMap();
+    const RopeQuadAttrSlots slots {
+        .position = FindAttrSlot(attrs, WE_IN_POSITIONVEC4),
+        .endpoint = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4),
+        .cp_start = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C1),
+        .cp_end4  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C2),
+        .cp_end3  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC3C2),
+        .color2   = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C3),
+        .uv4      = FindAttrSlot(attrs, WE_IN_TEXCOORDC4),
+        .uv3      = FindAttrSlot(attrs, WE_IN_TEXCOORDC3),
+        .color    = FindAttrSlot(attrs, WE_IN_COLOR),
+    };
     size_t total = 0;
     for (const auto& inst : instances) {
         if (inst->IsNoLiveParticle()) continue;
@@ -333,7 +348,8 @@ inline size_t GenRopeParticleQuadData(std::span<const std::unique_ptr<ParticleIn
         const size_t n         = std::min(particles.size(), trails.size());
         for (size_t si = 0; si < n; si++) {
             if (! ParticleModify::LifetimeOk(particles[si])) continue;
-            total += GenRopeParticleQuadSegments(particles[si], trails[si], specOp, opt, sv, total);
+            total +=
+                GenRopeParticleQuadSegments(particles[si], trails[si], specOp, opt, slots, sv, total);
         }
     }
     return total;

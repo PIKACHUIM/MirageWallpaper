@@ -413,6 +413,7 @@ struct FieldScript::Impl {
     // Per-script cursor-inside-bbox state used to edge-detect
     // cursorEnter / cursorLeave between frames.
     bool cursor_inside { false };
+    bool has_cursor_callbacks { false };
     // Pre-spawned SceneNode clones available to thisScene.createLayer.
     // Populated by WireFieldScripts for audio-bar style scripts; popped
     // from the front each createLayer call.
@@ -2485,7 +2486,7 @@ void JsRuntime::TickAll() {
     };
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
-        if (! I->alive || ! I->node) continue;
+        if (! I->alive || ! I->node || ! I->has_cursor_callbacks) continue;
         const bool now_inside = in_window && HitTestNode(I->node, cursor);
         BindThisLayer(
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
@@ -2595,6 +2596,13 @@ bool FunctionTakesArg(JSContext* ctx, JSValue fn) {
     JS_ToInt32(ctx, &n, len);
     JS_FreeValue(ctx, len);
     return n >= 1;
+}
+
+bool HasModuleFunction(JSContext* ctx, JSValue ns, const char* name) {
+    JSValue fn = JS_GetPropertyStr(ctx, ns, name);
+    bool    ok = JS_IsFunction(ctx, fn);
+    JS_FreeValue(ctx, fn);
+    return ok;
 }
 
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
@@ -2721,6 +2729,10 @@ FieldScript* JsRuntime::MakeFieldScript(
     // updates so the first frame's `update(value)` sees a Vec3, not a
     // raw string.
     I->current_value = init_arg;
+    I->has_cursor_callbacks =
+        HasModuleFunction(ctx, ns, "cursorEnter") || HasModuleFunction(ctx, ns, "cursorLeave") ||
+        HasModuleFunction(ctx, ns, "cursorMove") || HasModuleFunction(ctx, ns, "cursorDown") ||
+        HasModuleFunction(ctx, ns, "cursorUp") || HasModuleFunction(ctx, ns, "cursorClick");
 
     auto* raw = fs.get();
     m_impl->scripts.push_back(std::move(fs));

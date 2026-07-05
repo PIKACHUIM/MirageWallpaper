@@ -139,6 +139,7 @@ private:
 
     Map<void*, SceneUniformNodeData> m_nodeDataMap;
     Map<void*, SceneUniformInfo>     m_nodeUniformInfoMap;
+    Map<void*, Eigen::Matrix4d>      m_cameraVpFrameCache;
 };
 
 } // namespace sr

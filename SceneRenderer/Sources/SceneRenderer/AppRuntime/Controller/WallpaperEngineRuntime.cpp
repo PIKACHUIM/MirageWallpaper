@@ -1,5 +1,7 @@
 module;
 
+#include <chrono>
+#include <cstdlib>
 #include <rstd/macro.hpp>
 
 module sr.scene_wallpaper;
@@ -125,6 +127,20 @@ struct MainMsg {
 
 namespace
 {
+
+bool PerfDiagEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SCENERENDERER_PERF_DIAG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+using PerfClock = std::chrono::steady_clock;
+
+double MsSince(PerfClock::time_point begin, PerfClock::time_point end = PerfClock::now()) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
 
 nlohmann::json MakeUserPropertyDescriptor(nlohmann::json value) {
     if (value.is_object() && value.contains("value")) return value;
@@ -717,6 +733,13 @@ void SceneRenderController::on(RenderStop&& m) {
 }
 
 void SceneRenderController::on(RenderDraw&&) {
+    const bool perf_diag = PerfDiagEnabled();
+    auto       perf_frame_begin = PerfClock::now();
+    double     perf_scene_ms {};
+    double     perf_particle_ms {};
+    double     perf_video_ms {};
+    double     perf_font_ms {};
+    double     perf_draw_ms {};
     frame_timer.FrameBegin();
     if (m_rg) {
         m_scene->shaderValueUpdater->FrameBegin();
@@ -732,6 +755,7 @@ void SceneRenderController::on(RenderDraw&&) {
         // what FrameBegin set up; UpdateUniforms runs inside drawFrame.
         // The runtime is a no-op when no ScriptScene is installed.
         {
+            auto perf_begin = PerfClock::now();
             sr::script::FrameInputs fi;
             fi.frametime = static_cast<float>(m_scene->frameTime * m_speed);
             fi.runtime   = static_cast<float>(m_scene->elapsingTime);
@@ -783,19 +807,36 @@ void SceneRenderController::on(RenderDraw&&) {
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
+            if (perf_diag) perf_scene_ms = MsSince(perf_begin);
         }
-        m_scene->paritileSys->Emitt();
+        {
+            auto perf_begin = PerfClock::now();
+            m_scene->paritileSys->Emitt();
+            if (perf_diag) perf_particle_ms = MsSince(perf_begin);
+        }
 
         /* Advance video textures (no-op if none) before drawFrame so
          * the new RGBA frame is sampled by the same render pass. */
-        m_render->pumpVideoTextures(frame_timer.IdeaTime() * m_speed);
+        {
+            auto perf_begin = PerfClock::now();
+            m_render->pumpVideoTextures(frame_timer.IdeaTime() * m_speed);
+            if (perf_diag) perf_video_ms = MsSince(perf_begin);
+        }
 
         /* Upload any glyph rects the actuators added this tick. Runs after
          * TickSceneScripts (which calls FontFace::Populate) and before
          * drawFrame so newly-rasterised glyphs are visible the same frame. */
-        m_render->pumpFontAtlases(*m_scene);
+        {
+            auto perf_begin = PerfClock::now();
+            m_render->pumpFontAtlases(*m_scene);
+            if (perf_diag) perf_font_ms = MsSince(perf_begin);
+        }
 
-        m_render->drawFrame(*m_scene);
+        {
+            auto perf_begin = PerfClock::now();
+            m_render->drawFrame(*m_scene);
+            if (perf_diag) perf_draw_ms = MsSince(perf_begin);
+        }
 
         m_scene->PassFrameTime(frame_timer.IdeaTime() * m_speed);
 
@@ -807,6 +848,20 @@ void SceneRenderController::on(RenderDraw&&) {
         }
     }
     frame_timer.FrameEnd();
+    if (perf_diag && m_rg) {
+        static uint64_t frame_count = 0;
+        ++frame_count;
+        if ((frame_count % 120u) == 0u) {
+            rstd_info("PerfDiag runtime frame={} total_us={} scene_us={} particle_us={} video_us={} font_us={} draw_us={}",
+                      frame_count,
+                      static_cast<std::uint64_t>(MsSince(perf_frame_begin) * 1000.0),
+                      static_cast<std::uint64_t>(perf_scene_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_particle_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_video_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_font_ms * 1000.0),
+                      static_cast<std::uint64_t>(perf_draw_ms * 1000.0));
+        }
+    }
 }
 
 void SceneRenderController::on(RenderSetFillMode&& m) {
@@ -906,7 +961,7 @@ void SceneRenderController::on(RenderSwapchainReady&& m) {
     }
     bool extent_changed = m_render->onSwapchainReady(m.width, m.height);
     if (extent_changed && m_scene && m_rg) {
-        m_render->clearLastRenderGraph();
+        m_render->clearTransientRenderGraphResources();
         m_render->compileRenderGraph(*m_scene, *m_rg);
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     }

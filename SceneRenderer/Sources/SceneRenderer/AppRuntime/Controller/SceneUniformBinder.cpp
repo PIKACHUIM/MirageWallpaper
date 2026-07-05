@@ -80,6 +80,7 @@ Vector2f ShakeOffset(float x, float roughness) {
 } // namespace
 
 void SceneUniformUpdater::FrameBegin() {
+    m_cameraVpFrameCache.clear();
     /*
         using namespace std::chrono;
         auto nowTime = system_clock::to_time_t(system_clock::now());
@@ -218,22 +219,28 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     bool reqETVP  = info.has_ETVP;
     bool reqETVPI = info.has_ETVPI;
 
-    Matrix4d viewProTrans = camera->GetViewProjectionMatrix();
-    if (m_cameraShake.enable && camera == m_scene->activeCamera && camera->AllowCameraShake() &&
-        m_cameraShake.amplitude > 0.0f && m_cameraShake.speed > 0.0f) {
-        const float base_extent =
-            static_cast<float>(std::min(m_scene->ortho[0], m_scene->ortho[1]));
-        const float scale = m_cameraShake.amplitude * base_extent * 0.01f;
+    auto view_it = m_cameraVpFrameCache.find(camera);
+    if (view_it == m_cameraVpFrameCache.end()) {
+        Matrix4d viewProTrans = camera->GetViewProjectionMatrix();
+        if (m_cameraShake.enable && camera == m_scene->activeCamera && camera->AllowCameraShake() &&
+            m_cameraShake.amplitude > 0.0f && m_cameraShake.speed > 0.0f) {
+            const float base_extent =
+                static_cast<float>(std::min(m_scene->ortho[0], m_scene->ortho[1]));
+            const float scale = m_cameraShake.amplitude * base_extent * 0.01f;
 
-        const float t      = static_cast<float>(m_scene->elapsingTime) * m_cameraShake.speed * 2.0f;
-        auto        offset = ShakeOffset(t, m_cameraShake.roughness);
-        Vector3d    shake {
-            static_cast<double>(offset.x() * scale),
-            static_cast<double>(offset.y() * scale),
-            0.0,
-        };
-        viewProTrans = viewProTrans * Affine3d(Translation3d(shake)).matrix();
+            const float t =
+                static_cast<float>(m_scene->elapsingTime) * m_cameraShake.speed * 2.0f;
+            auto     offset = ShakeOffset(t, m_cameraShake.roughness);
+            Vector3d shake {
+                static_cast<double>(offset.x() * scale),
+                static_cast<double>(offset.y() * scale),
+                0.0,
+            };
+            viewProTrans = viewProTrans * Affine3d(Translation3d(shake)).matrix();
+        }
+        view_it = m_cameraVpFrameCache.emplace(camera, viewProTrans).first;
     }
+    const Matrix4d& viewProTrans = view_it->second;
 
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
@@ -459,9 +466,9 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     // WE audio-bar shaders. std140 array stride is 16 bytes per element, so
     // pack each already-smoothed amplitude into .x and leave .yzw at zero.
     auto push_audio = [&](std::string_view name, std::span<const float> visual) {
-        std::vector<float> packed(visual.size() * 4, 0.0f);
+        std::array<float, 64 * 4> packed {};
         for (std::size_t i = 0; i < visual.size(); ++i) packed[i * 4] = visual[i];
-        updateOp(name, std::span<const float>(packed));
+        updateOp(name, std::span<const float>(packed.data(), visual.size() * 4));
     };
     if (info.has_audio_16_l) push_audio(G_AUDIO_SPEC_16_L, m_audio_16_l);
     if (info.has_audio_16_r) push_audio(G_AUDIO_SPEC_16_R, m_audio_16_r);
