@@ -653,6 +653,48 @@ void CloseSyncFd(int fd) {
     if (fd >= 0) ::close(fd);
 }
 
+std::uint8_t FloatToByte(float v) {
+    v = std::clamp(v, 0.0f, 1.0f);
+    return static_cast<std::uint8_t>(v * 255.0f + 0.5f);
+}
+
+bool ConvertNv12ToRgba(const wavsen::video::Nv12Frame& frame,
+                       const wavsen::video::ColorMatrix& matrix,
+                       std::vector<std::uint8_t>& rgba) {
+    if (frame.width == 0 || frame.height == 0) return false;
+    const std::size_t y_size = static_cast<std::size_t>(frame.width) * frame.height;
+    const std::size_t expected = y_size + y_size / 2;
+    if (frame.data.size() < expected) return false;
+
+    rgba.resize(y_size * 4);
+    const auto* y_plane  = frame.data.data();
+    const auto* uv_plane = frame.data.data() + y_size;
+
+    for (std::uint32_t y = 0; y < frame.height; ++y) {
+        const std::uint32_t uv_y = y / 2;
+        for (std::uint32_t x = 0; x < frame.width; ++x) {
+            const std::uint32_t uv_x = x & ~1u;
+            const std::size_t   yi   = static_cast<std::size_t>(y) * frame.width + x;
+            const std::size_t   uvi  = static_cast<std::size_t>(uv_y) * frame.width + uv_x;
+
+            const float yy = static_cast<float>(y_plane[yi]) / 255.0f + matrix.offset[0];
+            const float cb = static_cast<float>(uv_plane[uvi]) / 255.0f + matrix.offset[1];
+            const float cr = static_cast<float>(uv_plane[uvi + 1]) / 255.0f + matrix.offset[2];
+
+            const float r = yy * matrix.m_r[0] + cb * matrix.m_r[1] + cr * matrix.m_r[2];
+            const float g = yy * matrix.m_g[0] + cb * matrix.m_g[1] + cr * matrix.m_g[2];
+            const float b = yy * matrix.m_b[0] + cb * matrix.m_b[1] + cr * matrix.m_b[2];
+
+            const std::size_t oi = yi * 4;
+            rgba[oi + 0]         = FloatToByte(r);
+            rgba[oi + 1]         = FloatToByte(g);
+            rgba[oi + 2]         = FloatToByte(b);
+            rgba[oi + 3]         = 255;
+        }
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 struct TextureCache::VideoRegistry {
@@ -672,6 +714,7 @@ struct TextureCache::VideoRegistry {
         VmaImageParameters                           image; /* moved into m_tex_map */
         std::unique_ptr<wavsen::video::VideoDecoder> decoder;
         wavsen::video::Nv12Frame                     nv12_scratch;
+        std::vector<std::uint8_t>                    rgba_scratch;
         double                                       pts_acc { 0.0 };
         double                                       last_pts { -1.0 };
         bool                                         have_frame { false };
@@ -782,8 +825,6 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
     slot->image = std::move(*img_opt);
     AssignImageGeneration(slot->image);
 
-    if (! m_video_registry->ensureYuv(m_device, slot->width, slot->height)) return {};
-
     /* 2) Initial layout: UNDEFINED → TRANSFER_DST → clear black →
      * SHADER_READ_ONLY. Mirrors the one-shot pattern used by the
      * existing TransImgLayout / CopyImageData helpers in this file. */
@@ -844,7 +885,10 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
                         mip.videoSize)]() -> std::unique_ptr<wavsen::video::IInputStream> {
         return std::make_unique<PkgRangedInputStream>(pkg, off, len);
     };
-    const auto              requested_hwdec = ParseHwdec(m_video_registry->options.hwdec);
+    auto                    requested_hwdec = ParseHwdec(m_video_registry->options.hwdec);
+#if defined(__APPLE__)
+    requested_hwdec = wavsen::video::HwAccel::None;
+#endif
     wavsen::video::OpenOpts opts {
         requested_hwdec,
         {},
@@ -891,8 +935,6 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
     for (auto& up : m_video_registry->slots) {
         auto& s = *up;
         s.pts_acc += dt_seconds;
-        auto* yuv = m_video_registry->ensureYuv(m_device, s.width, s.height);
-        if (! yuv) continue;
 
         auto it = m_tex_map.find(s.key);
         if (it == m_tex_map.end() || it->second.slots.empty()) continue;
@@ -957,6 +999,91 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         const auto color_matrix =
             wavsen::video::make_color_matrix(static_cast<wavsen::video::ColorSpace>(cs_id),
                                              static_cast<wavsen::video::ColorRange>(cr_id));
+
+        auto upload_rgba = [&](const std::vector<std::uint8_t>& rgba) -> bool {
+            const std::size_t bytes = static_cast<std::size_t>(s.width) * s.height * 4;
+            if (rgba.size() < bytes) return false;
+
+            VmaBufferParameters stage;
+            if (! CreateStagingBuffer(m_device.vma_allocator(), bytes, stage)) return false;
+            {
+                void* v = nullptr;
+                VVK_CHECK(stage.handle.MapMemory(&v));
+                std::memcpy(v, rgba.data(), bytes);
+                stage.handle.UnMapMemory();
+            }
+
+            if (! m_tex_cmd) allocateCmd();
+            VVK_CHECK(m_tex_cmd.Begin(VkCommandBufferBeginInfo {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            }));
+            VkImageSubresourceRange range {
+                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel   = 0,
+                .levelCount     = 1,
+                .baseArrayLayer = 0,
+                .layerCount     = 1,
+            };
+            VkImageMemoryBarrier to_xfer {
+                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask    = VK_ACCESS_SHADER_READ_BIT,
+                .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .image            = ip.handle,
+                .subresourceRange = range,
+            };
+            m_tex_cmd.PipelineBarrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                      VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                      0,
+                                      to_xfer);
+            VkBufferImageCopy region {};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent                 = VkExtent3D { s.width, s.height, 1 };
+            m_tex_cmd.CopyBufferToImage(
+                *stage.handle, ip.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+            VkImageMemoryBarrier to_shader {
+                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .image            = ip.handle,
+                .subresourceRange = range,
+            };
+            m_tex_cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                      0,
+                                      to_shader);
+            VVK_CHECK(m_tex_cmd.End());
+            VkSubmitInfo si {
+                .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers    = m_tex_cmd.address(),
+            };
+            VVK_CHECK(m_device.graphics_queue().handle.Submit(si));
+            VVK_CHECK(m_device.handle().WaitIdle());
+            return true;
+        };
+
+        if (fkind == wavsen::video::FrameKind::Sw) {
+            if (! ConvertNv12ToRgba(s.nv12_scratch, color_matrix, s.rgba_scratch)) {
+                rstd_error("PumpVideoTextures[{}]: CPU NV12->RGBA conversion failed", s.key);
+                continue;
+            }
+            if (! upload_rgba(s.rgba_scratch)) {
+                rstd_error("PumpVideoTextures[{}]: CPU RGBA upload failed", s.key);
+                continue;
+            }
+            s.have_frame = true;
+            continue;
+        }
+
+        auto* yuv = m_video_registry->ensureYuv(m_device, s.width, s.height);
+        if (! yuv) continue;
 
         rstd::Result<int, wavsen::video::Error> cv = rstd::Ok(-1);
         switch (fkind) {

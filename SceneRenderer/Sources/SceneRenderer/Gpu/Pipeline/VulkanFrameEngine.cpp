@@ -248,6 +248,14 @@ sr::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchai
 bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_inited) return true;
 
+#if defined(__APPLE__)
+    if (info.video_hwdec != "none") {
+        rstd_info("macOS video textures use software decode; ignoring video_hwdec={}",
+                  info.video_hwdec);
+        info.video_hwdec = "none";
+    }
+#endif
+
     m_redraw_cb = info.redraw_callback;
     VkExtent2D extent { info.width, info.height };
     if (extent.width * extent.height < 500 * 500) {
