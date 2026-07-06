@@ -167,6 +167,11 @@ nlohmann::json JsonUserProperty(nlohmann::json value) {
     return MakeUserPropertyDescriptor(std::move(value));
 }
 
+nlohmann::json InitialUserProperty(nlohmann::json value) {
+    if (value.is_string()) return RawUserProperty(value.get<std::string>());
+    return MakeUserPropertyDescriptor(std::move(value));
+}
+
 constexpr std::string_view kSchemeColorKey          = "schemecolor";
 constexpr std::string_view kSrSchemeColorKey = "scenerenderer.scheme_color";
 
@@ -382,17 +387,17 @@ void ApplyUserPropertyToImageAlpha(Scene& scene, const std::string& key,
         std::array<float, 4> color4 { color.x(), color.y(), color.z(), alpha };
         for (auto* material : binding.materials) {
             if (! material) continue;
-            const bool has_user_alpha = MaterialHasShaderUniform(*material, "g_UserAlpha");
+            const bool has_user_alpha = MaterialHasShaderUniform(*material, G_USERALPHA);
             if (has_user_alpha) {
-                material->customShader.constValues["g_UserAlpha"] = alpha;
+                material->customShader.constValues[G_USERALPHA] = alpha;
                 material->customShader.dirty                      = true;
             }
-            if (MaterialHasShaderUniform(*material, "g_Alpha")) {
-                material->customShader.constValues["g_Alpha"] = alpha;
+            if (MaterialHasShaderUniform(*material, G_ALPHA)) {
+                material->customShader.constValues[G_ALPHA] = alpha;
                 material->customShader.dirty                  = true;
             }
-            if (! has_user_alpha && MaterialHasShaderUniform(*material, "g_Color4")) {
-                material->customShader.constValues["g_Color4"] = color4;
+            if (! has_user_alpha && MaterialHasShaderUniform(*material, G_COLOR4)) {
+                material->customShader.constValues[G_COLOR4] = color4;
                 material->customShader.dirty                   = true;
             }
         }
@@ -565,7 +570,7 @@ NormalizeUserProperties(const std::unordered_map<std::string, nlohmann::json>& i
     for (const auto& [key, value] : input) {
         std::string canonical = CanonicalUserPropertyKey(key);
         if (key == canonical || ! out.contains(canonical)) {
-            out[std::move(canonical)] = MakeUserPropertyDescriptor(value);
+            out[std::move(canonical)] = InitialUserProperty(value);
         }
     }
     return out;
