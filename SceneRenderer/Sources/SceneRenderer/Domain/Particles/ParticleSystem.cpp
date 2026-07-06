@@ -128,7 +128,8 @@ void ParticleSubSystem::Warmup() {
 }
 
 void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
-    double simulation_time = frame_time * m_rate;
+    double emitter_time    = frame_time * m_rate;
+    double simulation_time = frame_time;
     m_time += simulation_time;
 
     // Cursor in canvas-absolute world coords. The "global" camera lives at
@@ -234,7 +235,7 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
                 emittOp(inst->ParticlesVec(),
                         m_initializers,
                         m_maxcount,
-                        frame_time,
+                        emitter_time,
                         std::span<const float> { audio_average.data(), audio_average.size() },
                         std::span<const ParticleControlpoint> { m_controlpoints });
             }
