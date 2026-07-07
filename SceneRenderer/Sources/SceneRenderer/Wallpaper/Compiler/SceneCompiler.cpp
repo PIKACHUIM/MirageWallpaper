@@ -3276,20 +3276,18 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // Layer RT must cover the source glyph bounds, not the main canvas.
     // Clock/date scripts often render a large text source and shrink it with
     // the scene transform when composing into the world.
-    const float object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
-    const float object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
-    const float dynamic_w_budget =
-        std::max({ text_source_bbox_w, text_bbox_w, object_w * 3.0f, 1024.0f });
-    const float dynamic_h_budget =
-        std::max({ text_source_bbox_h, text_bbox_h, object_h * 2.0f, 256.0f });
-    const float layer_max_w = wants_dynamic_text
-                                  ? (has_text_effect ? object_w : dynamic_w_budget)
-                                  : (has_text_effect ? object_w : text_source_bbox_w);
-    const float layer_max_h = wants_dynamic_text
-                                  ? (has_text_effect ? object_h : dynamic_h_budget)
-                                  : (has_text_effect ? object_h : text_source_bbox_h);
-    const i32 layer_w = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_w, layer_max_w)));
-    const i32 layer_h = std::max<i32>(1, (i32)std::ceil(std::max(text_source_bbox_h, layer_max_h)));
+    const float                    object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
+    const float                    object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
+    const text::TextGeometryPolicy geometry_policy {
+        .frame_width        = object_w,
+        .frame_height       = object_h,
+        .dynamic            = wants_dynamic_text,
+        .has_effect         = has_text_effect,
+        .effect_frame_bound = obj.copybackground,
+    };
+    const auto initial_geometry = text::ResolveTextGeometry(geometry_policy, layouter->Metrics());
+    const i32  layer_w          = std::max<i32>(1, (i32)std::ceil(initial_geometry.rt_width));
+    const i32  layer_h          = std::max<i32>(1, (i32)std::ceil(initial_geometry.rt_height));
     {
         auto&             scene   = *context.scene;
         const std::string addr    = getAddr(sp_node.as_ptr());
@@ -3315,8 +3313,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
 
         compose_node->CopyTrans(*sp_node.as_ptr());
         compose_node->ID() = obj.id;
-        compose_node->SetSize(
-            { has_text_effect ? object_w : text_bbox_w, has_text_effect ? object_h : text_bbox_h });
+        compose_node->SetSize({ initial_geometry.draw_width, initial_geometry.draw_height });
 
         // With text effects, the effect layer hangs off compose_node (the
         // world-space composite quad) so effect passes see the composited
@@ -3430,22 +3427,29 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                         const float effect_w = static_cast<float>(layer_w);
                         const float effect_h = static_cast<float>(layer_h);
                         if (wpfbo.fit > 0) {
-                            const float max_size = std::max(effect_w, effect_h);
+                            const float max_size = std::max(initial_geometry.effect_frame_width,
+                                                            initial_geometry.effect_frame_height);
                             if (max_size > 0.0f) {
                                 const float fit_scale = static_cast<float>(wpfbo.fit) / max_size;
                                 return {
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(effect_w * fit_scale))),
+                                        std::max(1.0f,
+                                                 std::round(initial_geometry.effect_frame_width *
+                                                            fit_scale))),
                                     static_cast<uint16_t>(
-                                        std::max(1.0f, std::round(effect_h * fit_scale))),
+                                        std::max(1.0f,
+                                                 std::round(initial_geometry.effect_frame_height *
+                                                            fit_scale))),
                                 };
                             }
                         }
                         return {
-                            static_cast<uint16_t>(
-                                std::max(1.0f, effect_w / static_cast<float>(wpfbo.scale))),
-                            static_cast<uint16_t>(
-                                std::max(1.0f, effect_h / static_cast<float>(wpfbo.scale))),
+                            static_cast<uint16_t>(std::max(1.0f,
+                                                           initial_geometry.effect_frame_width /
+                                                               static_cast<float>(wpfbo.scale))),
+                            static_cast<uint16_t>(std::max(1.0f,
+                                                           initial_geometry.effect_frame_height /
+                                                               static_cast<float>(wpfbo.scale))),
                         };
                     }();
                     scene.renderTargets[rtname] = { .width      = fbo_size[0],
@@ -3509,7 +3513,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                     sv.propagatedParallaxDepth        = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
                     sv.parallaxDepth                  = { obj.parallaxDepth[0], obj.parallaxDepth[1] };
                     sv.effect_projection_node         = compose_node.as_ptr();
-                    sv.effect_projection_size  = { object_w, object_h };
+                    sv.effect_projection_size  = { initial_geometry.effect_frame_width,
+                                                   initial_geometry.effect_frame_height };
                     sr::Map<std::string, SceneShaderValueAnimation> final_quad_shader_values;
                     if (! LoadMaterial(*context.vfs,
                                        wpmat,
@@ -3602,42 +3607,38 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                             apply_text_anchor,
                             layer_w,
                             layer_h,
-                            has_text_effect,
-                            wants_dynamic_text,
-                            object_w,
-                            object_h,
+                            geometry_policy,
                             text_padding =
                                 style.padding](float tw, float th, float source_w, float source_h) {
-        auto* compose_ptr = compose_hold.get();
-        if (tw <= 0.0f) tw = 1.0f;
-        if (th <= 0.0f) th = 1.0f;
-        if (source_w <= 0.0f) source_w = tw;
-        if (source_h <= 0.0f) source_h = th;
-        if (has_text_effect) {
-            tw       = object_w;
-            th       = object_h;
-            source_w = object_w;
-            source_h = object_h;
-        }
-        const float sample_w = has_text_effect ? source_w : tw;
-        const float sample_h = has_text_effect ? source_h : th;
-        anchor_state->width  = tw;
-        anchor_state->height = th;
-        compose_ptr->SetSize({ tw, th });
+        auto*      compose_ptr = compose_hold.get();
+        const auto geometry    = text::ResolveTextGeometry(geometry_policy,
+                                                           text::TextLayoutMetrics {
+                                                               .text_width    = tw,
+                                                               .text_height   = th,
+                                                               .source_width  = source_w,
+                                                               .source_height = source_h,
+                                                               .padding       = text_padding,
+                                                           });
+        anchor_state->width    = geometry.draw_width;
+        anchor_state->height   = geometry.draw_height;
+        compose_ptr->SetSize({ geometry.draw_width, geometry.draw_height });
+
+
         apply_text_anchor();
-        const float                 hx = tw * 0.5f;
-        const float                 hy = th * 0.5f;
+        const float                 hx = geometry.draw_width * 0.5f;
+        const float                 hy = geometry.draw_height * 0.5f;
         const std::array<float, 12> pos {
             -hx, -hy, 0.0f, -hx, +hy, 0.0f, +hx, -hy, 0.0f, +hx, +hy, 0.0f,
         };
-        const float                u_half = 0.5f * std::min(1.0f, sample_w / float(layer_w));
-        const float                v_half = 0.5f * std::min(1.0f, sample_h / float(layer_h));
-        const float                u_l    = 0.5f - u_half;
-        const float                u_r    = 0.5f + u_half;
-        const float                v_t    = 0.5f - v_half;
-        const float                v_b    = 0.5f + v_half;
+        const float u_half = 0.5f * std::min(1.0f, geometry.uv_source_width / float(layer_w));
+        const float v_half = 0.5f * std::min(1.0f, geometry.uv_source_height / float(layer_h));
+        const float u_l    = 0.5f - u_half;
+        const float u_r    = 0.5f + u_half;
+        const float v_t    = 0.5f - v_half;
+        const float v_b    = 0.5f + v_half;
         const std::array<float, 8> uv {
             u_l, v_b, u_l, v_t, u_r, v_b, u_r, v_t,
+        };
         };
         auto* mesh = compose_ptr->Mesh();
         if (mesh == nullptr) return;
