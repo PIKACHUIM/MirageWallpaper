@@ -1816,7 +1816,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                                                       Vector3f(wpimgobj.angles.data()),
                                                       wpimgobj.name);
     const Vector3f alignment_offset =
-        AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
+        wpimgobj.fullscreen
+            ? Vector3f::Zero()
+            : AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
     spImgNode->SetSize({ geometry_size[0], geometry_size[1] });
     spImgNode->SetPerspective(wpimgobj.perspective);
     spImgNode->SetBaseColor(Vector3f(wpimgobj.color.data()), wpimgobj.alpha);
@@ -2023,7 +2025,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                     alignment_offset);
     }
     // material blendmode for last step to use
-    if (use_final_shader_color_blend) finalMaterialState.blenmode = BlendMode::Disable;
+    auto finalMaterialState = material;
     // disable img material blend, as it's the first effect node now
     if (hasEffect) {
         material.blenmode = BlendMode::Normal;
