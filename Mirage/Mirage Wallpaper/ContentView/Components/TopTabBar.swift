@@ -57,12 +57,24 @@ struct TopTabBar: SubviewOfContentView {
                     Button {
                         viewModel.topTabBarSelection = 2
                     } label: {
-                        Label("创意工坊", systemImage: "cloud.fill")
-                            .contentShape(Rectangle())
-                            .foregroundStyle(viewModel.topTabBarSelection == 2 ? .white : .primary)
-                            .foregroundStyle(viewModel.topTabBarHoverSelection == 2 ? .white : .primary)
-                            .font(.title3)
-                            .padding(4)
+                        ZStack(alignment: .topTrailing) {
+                            Label("创意工坊", systemImage: "cloud.fill")
+                                .contentShape(Rectangle())
+                                .foregroundStyle(viewModel.topTabBarSelection == 2 ? .white : .primary)
+                                .foregroundStyle(viewModel.topTabBarHoverSelection == 2 ? .white : .primary)
+                                .font(.title3)
+                                .padding(4)
+                            if AppDelegate.shared.workshopViewModel.activeDownloadCount > 0 {
+                                Text("\(AppDelegate.shared.workshopViewModel.activeDownloadCount)")
+                                    .font(.system(size: 9))
+                                    .bold()
+                                    .foregroundStyle(.white)
+                                    .padding(3)
+                                    .background(Color.red)
+                                    .clipShape(Circle())
+                                    .offset(x: 4, y: -2)
+                            }
+                        }
                     }
                     .background(viewModel.topTabBarSelection == 2 ? Color.blue : Color.clear)
                     .background(viewModel.topTabBarHoverSelection == 2 ? Color.blue : Color.clear)

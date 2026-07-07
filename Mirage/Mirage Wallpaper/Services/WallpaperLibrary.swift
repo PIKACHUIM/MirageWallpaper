@@ -46,6 +46,9 @@ final class WallpaperLibrary {
     private let workshopKey = "CustomWorkshopDirectory"
     private let importedKey = "CustomImportedDirectory"
 
+    private var workshopMonitorSource: DispatchSourceFileSystemObject?
+    private var workshopMonitorFD: Int32 = -1
+
     var defaultSteamWorkshopDirectory: URL {
         fm.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/Steam/steamapps/workshop/content/431960")
@@ -91,7 +94,14 @@ final class WallpaperLibrary {
     }
 
     private var sourceDirectories: [URL] {
-        [steamWorkshopDirectory, importedDirectory]
+        var dirs = [steamWorkshopDirectory, importedDirectory]
+        if SteamCMDManager.shared.steamCMDPath != nil {
+            let steamCMDContent = SteamCMDManager.shared.steamCMDContentDirectory
+            if fm.fileExists(atPath: steamCMDContent.path) {
+                dirs.append(steamCMDContent)
+            }
+        }
+        return dirs
     }
 
     func allWallpaperURLs() -> [URL] {
@@ -206,5 +216,41 @@ final class WallpaperLibrary {
 
     func isImported(_ wallpaper: WEWallpaper) -> Bool {
         wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
+    }
+
+    // MARK: - Directory Monitoring
+
+    func startMonitoringWorkshopDirectory(onChange: @escaping () -> Void) {
+        stopMonitoringWorkshopDirectory()
+
+        let dirPath = steamWorkshopDirectory.path
+        guard fm.fileExists(atPath: dirPath) else { return }
+
+        workshopMonitorFD = open(dirPath, O_EVTONLY)
+        guard workshopMonitorFD >= 0 else { return }
+
+        workshopMonitorSource = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: workshopMonitorFD,
+            eventMask: .write,
+            queue: .main
+        )
+
+        workshopMonitorSource?.setEventHandler {
+            onChange()
+        }
+
+        workshopMonitorSource?.setCancelHandler { [weak self] in
+            if let fd = self?.workshopMonitorFD, fd >= 0 {
+                close(fd)
+                self?.workshopMonitorFD = -1
+            }
+        }
+
+        workshopMonitorSource?.resume()
+    }
+
+    func stopMonitoringWorkshopDirectory() {
+        workshopMonitorSource?.cancel()
+        workshopMonitorSource = nil
     }
 }

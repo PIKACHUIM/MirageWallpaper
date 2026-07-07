@@ -96,10 +96,13 @@ struct WallpaperPreview: SubviewOfContentView {
                             Image(systemName: "star")
                         }
                         .font(.caption)
-                        Button { } label: {
-                            Image(systemName: "heart")
+                        Button {
+                            FavoritesManager.shared.toggle(wallpaperViewModel.currentWallpaper.id)
+                            NotificationCenter.default.post(name: .favoritesChanged, object: nil)
+                        } label: {
+                            Image(systemName: FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id) ? "heart.fill" : "heart")
+                                .foregroundStyle(FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id) ? .red : .secondary)
                         }
-                        .disabled(true)
                     }
                     HStack {
                         Text(wallpaperViewModel.currentWallpaper.project.type)

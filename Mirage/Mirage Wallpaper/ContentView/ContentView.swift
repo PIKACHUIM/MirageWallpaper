@@ -12,10 +12,16 @@ protocol SubviewOfContentView: View {
 
 struct ContentView: View {
     @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
-    
+
     @ObservedObject var viewModel: ContentViewModel
-    
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject var workshopViewModel: WorkshopViewModel
+
+    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+        self.viewModel = viewModel
+        self.wallpaperViewModel = wallpaperViewModel
+        self.workshopViewModel = workshopViewModel
+    }
 
     var body: some View {
         ZStack {
@@ -45,11 +51,26 @@ struct ContentView: View {
                             }
                             .animation(.default, value: viewModel.isFilterReveal)
                         case 1:
-                            WallpaperDiscover()
+                            DiscoverView(
+                                workshopViewModel: workshopViewModel,
+                                viewModel: viewModel
+                            )
                         case 2:
                             ExplorerTopBar(contentViewModel: viewModel)
-                            WorkingInProgress()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .environmentObject(globalSettingsViewModel)
+                            HStack(spacing: 0) {
+                                WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
+                                    .frame(width: viewModel.isFilterReveal ? 225 : 0)
+                                    .opacity(viewModel.isFilterReveal ? 1 : 0)
+                                    .animation(.spring(), value: viewModel.isFilterReveal)
+
+                                WorkshopView(
+                                    workshopViewModel: workshopViewModel,
+                                    viewModel: viewModel
+                                )
+                                .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
+                            }
+                            .animation(.default, value: viewModel.isFilterReveal)
                         default:
                             fatalError()
                         }
@@ -57,8 +78,19 @@ struct ContentView: View {
                     }
                     .padding()
 
-                    WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                    if viewModel.topTabBarSelection == 0 {
+                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                            .frame(maxWidth: 320)
+                    } else if workshopViewModel.showCustomization {
+                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                            .frame(maxWidth: 320)
+                    } else {
+                        WorkshopItemDetail(
+                            item: workshopViewModel.selectedItem,
+                            workshopViewModel: workshopViewModel
+                        )
                         .frame(maxWidth: 320)
+                    }
                 }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
@@ -112,6 +144,10 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.isUnsafeWallpaperWarningPresented) {
             UnsafeWallpaper(wallpaper: wallpaperViewModel.nextCurrentWallpaper)
                 .frame(width: 600, height: 300)
+        }
+        .sheet(isPresented: $viewModel.isSteamSetupPresented) {
+            SteamSetupView(viewModel: SteamSetupViewModel())
+                .frame(width: 560, height: 640)
         }
         .frame(minWidth: 1000, minHeight: 640, idealHeight: 800)
     }

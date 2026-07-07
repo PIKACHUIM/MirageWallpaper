@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var contentViewModel = ContentViewModel()
     var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
+    var workshopViewModel = WorkshopViewModel()
 
     var importOpenPanel: NSOpenPanel!
 
@@ -37,7 +38,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        contentViewModel.refresh()
+        DispatchQueue.main.async {
+            self.contentViewModel.refresh()
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            SteamCMDManager.shared.refreshSessionIfNeeded()
+        }
 
         let w = wallpaperViewModel.currentWallpaper
         if w.isValid {
@@ -100,6 +107,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @MainActor @objc func toggleFilter() {
         self.contentViewModel.isFilterReveal.toggle()
+    }
+
+    @objc func openSteamSetup() {
+        contentViewModel.isSteamSetupPresented = true
     }
 
     func setSettingsWindow() {

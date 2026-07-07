@@ -1,0 +1,373 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
+import Foundation
+
+// MARK: - Workshop Item
+
+struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
+    var publishedFileId: String
+    var title: String
+    var itemDescription: String
+    var previewImageURL: URL?
+    var tags: [String]
+    var subscriptions: Int
+    var favorited: Int
+    var views: Int
+    var fileSize: Int64
+    var timeCreated: Date
+    var timeUpdated: Date
+    var creatorSteamId: String
+    var wallpaperType: String
+
+    var id: String { publishedFileId }
+
+    var kind: WallpaperKind {
+        WallpaperKind(rawType: wallpaperType)
+    }
+
+    var formattedFileSize: String {
+        ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
+    }
+
+    var formattedSubscriptions: String {
+        if subscriptions >= 1_000_000 {
+            return String(format: "%.1fM", Double(subscriptions) / 1_000_000)
+        } else if subscriptions >= 1_000 {
+            return String(format: "%.1fK", Double(subscriptions) / 1_000)
+        }
+        return "\(subscriptions)"
+    }
+
+    var formattedViews: String {
+        if views >= 1_000_000 {
+            return String(format: "%.1fM", Double(views) / 1_000_000)
+        } else if views >= 1_000 {
+            return String(format: "%.1fK", Double(views) / 1_000)
+        }
+        return "\(views)"
+    }
+
+    var formattedFavorited: String {
+        if favorited >= 1_000_000 {
+            return String(format: "%.1fM", Double(favorited) / 1_000_000)
+        } else if favorited >= 1_000 {
+            return String(format: "%.1fK", Double(favorited) / 1_000)
+        }
+        return "\(favorited)"
+    }
+
+    static let placeholder = WorkshopItem(
+        publishedFileId: "0",
+        title: "加载中...",
+        itemDescription: "",
+        previewImageURL: nil,
+        tags: [],
+        subscriptions: 0,
+        favorited: 0,
+        views: 0,
+        fileSize: 0,
+        timeCreated: Date(),
+        timeUpdated: Date(),
+        creatorSteamId: "",
+        wallpaperType: "scene"
+    )
+}
+
+// MARK: - Sort Order
+
+enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
+    case trending = 0
+    case mostRecent = 1
+    case mostSubscribed = 2
+    case topRated = 3
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .trending: return "热门趋势"
+        case .mostRecent: return "最新发布"
+        case .mostSubscribed: return "订阅最多"
+        case .topRated: return "评分最高"
+        }
+    }
+
+    var apiValue: Int {
+        switch self {
+        case .trending: return 0
+        case .mostRecent: return 1
+        case .mostSubscribed: return 3
+        case .topRated: return 12
+        }
+    }
+}
+
+// MARK: - Workshop Tag
+
+enum WorkshopTag: String, CaseIterable, Identifiable {
+    case anime = "Anime"
+    case nature = "Nature"
+    case abstract = "Abstract"
+    case landscape = "Landscape"
+    case sciFi = "Sci-Fi"
+    case cartoon = "Cartoon"
+    case cyberpunk = "Cyberpunk"
+    case fantasy = "Fantasy"
+    case girl = "Girl"
+    case game = "Game"
+    case animal = "Animal"
+    case music = "Music"
+    case vehicle = "Vehicle"
+    case technology = "Technology"
+    case retro = "Retro"
+    case city = "City"
+    case space = "Space"
+    case dark = "Dark"
+    case pixel = "Pixel Art"
+    case minimal = "Minimalist"
+    case underwater = "Underwater"
+    case relaxing = "Relaxing"
+    case medieval = "Medieval"
+    case unspecified = "Unspecified"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .anime: return "动漫"
+        case .nature: return "自然"
+        case .abstract: return "抽象"
+        case .landscape: return "风景"
+        case .sciFi: return "科幻"
+        case .cartoon: return "卡通"
+        case .cyberpunk: return "赛博朋克"
+        case .fantasy: return "奇幻"
+        case .girl: return "女孩"
+        case .game: return "游戏"
+        case .animal: return "动物"
+        case .music: return "音乐"
+        case .vehicle: return "车辆"
+        case .technology: return "科技"
+        case .retro: return "复古"
+        case .city: return "城市"
+        case .space: return "太空"
+        case .dark: return "暗黑"
+        case .pixel: return "像素"
+        case .minimal: return "极简"
+        case .underwater: return "水下"
+        case .relaxing: return "放松"
+        case .medieval: return "中世纪"
+        case .unspecified: return "未分类"
+        }
+    }
+
+    var sfSymbol: String {
+        switch self {
+        case .anime: return "sparkles"
+        case .nature: return "leaf.fill"
+        case .abstract: return "circle.hexagongrid.fill"
+        case .landscape: return "mountain.2.fill"
+        case .sciFi: return "atom"
+        case .cartoon: return "face.smiling.inverse"
+        case .cyberpunk: return "cpu"
+        case .fantasy: return "wand.and.stars"
+        case .girl: return "person.fill"
+        case .game: return "gamecontroller.fill"
+        case .animal: return "pawprint.fill"
+        case .music: return "music.note"
+        case .vehicle: return "car.fill"
+        case .technology: return "desktopcomputer"
+        case .retro: return "clock.arrow.circlepath"
+        case .city: return "building.2.fill"
+        case .space: return "moon.stars.fill"
+        case .dark: return "moon.fill"
+        case .pixel: return "square.grid.3x3.fill"
+        case .minimal: return "minus"
+        case .underwater: return "drop.fill"
+        case .relaxing: return "wind"
+        case .medieval: return "shield.fill"
+        case .unspecified: return "questionmark"
+        }
+    }
+}
+
+// MARK: - Wallpaper Type Filter
+
+enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
+    case all = "all"
+    case scene = "scene"
+    case web = "web"
+    case video = "video"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "全部"
+        case .scene: return "场景"
+        case .web: return "网页"
+        case .video: return "视频"
+        }
+    }
+}
+
+// MARK: - Download Task
+
+struct DownloadTask: Identifiable, Equatable {
+    var id: String { workshopItem.publishedFileId }
+    var workshopItem: WorkshopItem
+    var state: DownloadState
+    var startedAt: Date?
+    var completedAt: Date?
+
+    static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
+        lhs.id == rhs.id && lhs.state == rhs.state
+    }
+}
+
+enum DownloadState: Equatable {
+    case queued
+    case starting
+    case downloading(percent: Double)
+    case validating
+    case completed
+    case failed(String)
+}
+
+// MARK: - Steam Setup State
+
+enum SteamSetupState: Equatable {
+    case notConfigured
+    case steamCMDMissing
+    case needsLogin
+    case ready
+}
+
+enum SteamCMDInstallState: Equatable {
+    case detecting
+    case found(String)
+    case notFound
+    case downloading(Double)
+    case extracting
+    case installed(String)
+    case failed(String)
+}
+
+enum SteamLoginState: Equatable {
+    case idle
+    case loggingIn
+    case waitingForGuard(SteamGuardType)
+    case success
+    case failed(String)
+}
+
+enum SteamGuardType: Equatable {
+    case email
+    case mobile
+    case mobileConfirm
+}
+
+enum SyncState: Equatable {
+    case idle
+    case syncing
+    case completed
+    case failed(String)
+}
+
+// MARK: - Steam API Response Models
+
+struct SteamAPIResponse: Codable {
+    var response: SteamAPIResponseBody
+}
+
+struct SteamAPIResponseBody: Codable {
+    var total: Int?
+    var publishedfiledetails: [SteamPublishedFile]?
+}
+
+struct SteamPublishedFile: Codable {
+    var publishedfileid: String?
+    var title: String?
+    var file_description: String?
+    var preview_url: String?
+    var tags: [SteamTag]?
+    var subscriptions: Int?
+    var favorited: Int?
+    var views: Int?
+    var file_size: StringOrInt?
+    var time_created: Int?
+    var time_updated: Int?
+    var creator: String?
+
+    func toWorkshopItem() -> WorkshopItem {
+        let wallpaperType = tags?.first(where: {
+            let v = ($0.tag ?? "").lowercased()
+            return v == "scene" || v == "web" || v == "video"
+        })?.tag ?? "scene"
+
+        let tagStrings = tags?
+            .compactMap { $0.tag }
+            .filter { t in
+                let l = t.lowercased()
+                return l != "scene" && l != "web" && l != "video" &&
+                       l != "wallpaper" && l != "approved" &&
+                       l != "everyone" && l != "questionable" && l != "mature"
+            } ?? []
+
+        return WorkshopItem(
+            publishedFileId: publishedfileid ?? "",
+            title: title ?? "无标题",
+            itemDescription: file_description ?? "",
+            previewImageURL: URL(string: preview_url ?? ""),
+            tags: tagStrings,
+            subscriptions: subscriptions ?? 0,
+            favorited: favorited ?? 0,
+            views: views ?? 0,
+            fileSize: file_size?.int64Value ?? 0,
+            timeCreated: Date(timeIntervalSince1970: TimeInterval(time_created ?? 0)),
+            timeUpdated: Date(timeIntervalSince1970: TimeInterval(time_updated ?? 0)),
+            creatorSteamId: creator ?? "",
+            wallpaperType: wallpaperType
+        )
+    }
+}
+
+struct SteamTag: Codable {
+    var tag: String?
+    var display_name: String?
+}
+
+enum StringOrInt: Codable, Equatable {
+    case string(String)
+    case int(Int)
+
+    var int64Value: Int64 {
+        switch self {
+        case .string(let s): return Int64(s) ?? 0
+        case .int(let i): return Int64(i)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let i = try? container.decode(Int.self) {
+            self = .int(i); return
+        }
+        if let s = try? container.decode(String.self) {
+            self = .string(s); return
+        }
+        self = .int(0)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try container.encode(s)
+        case .int(let i): try container.encode(i)
+        }
+    }
+}

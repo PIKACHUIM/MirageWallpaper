@@ -91,7 +91,7 @@ struct FilterResults: View {
                                         Text(option)
                                     }
                                 }
-                                .disabled(i != 0 ? true : false)
+                                .toggleStyle(.checkbox)
                             }
                         }
                         .toggleStyle(.checkbox)

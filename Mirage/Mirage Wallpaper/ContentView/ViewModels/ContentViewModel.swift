@@ -6,6 +6,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name
@@ -42,18 +43,49 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @Published var hoveredWallpaper: WEWallpaper?
     
     @Published var isUnsubscribeConfirming = false
-    
+
     @Published var searchText = ""
+
+    @Published var isSteamSetupPresented = false
     
     @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50
     
     var importAlertError: WPImportError? = nil
-    
+
+    private var downloadObserver: AnyCancellable?
+    private var favoritesObserver: AnyCancellable?
+
     convenience init(isStaging: Bool, topTabBarSelection: Int = 0) {
         self.init()
         self.isStaging = isStaging
         self.topTabBarSelection = topTabBarSelection
-        refresh()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loaded = WallpaperLibrary.shared.loadAll()
+            DispatchQueue.main.async {
+                self.wallpapers = loaded
+            }
+        }
+    }
+
+    init() {
+        downloadObserver = NotificationCenter.default.publisher(for: .workshopItemDownloaded)
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refresh()
+            }
+
+        favoritesObserver = NotificationCenter.default.publisher(for: .favoritesChanged)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            WallpaperLibrary.shared.startMonitoringWorkshopDirectory { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    self?.refresh()
+                }
+            }
+        }
     }
     
     @Published public var currentPage: Int = 1
@@ -111,9 +143,28 @@ class ContentViewModel: ObservableObject, DropDelegate {
     
     private var filteredWallpapers: [WEWallpaper] {
         searchedWallpapers.filter { wallpaper in
-            var showOnly = FRShowOnly.none
-            if let approved = wallpaper.project.approved, approved { showOnly.insert(.approved) }
-            guard self.showOnly.contains(showOnly) else { return false }
+            // 仅显示：未选或全选时不筛选；否则按 AND 逻辑要求每项命中
+            let activeShowOnly = self.showOnly
+            if !activeShowOnly.isEmpty && activeShowOnly != FRShowOnly.all {
+                if activeShowOnly.contains(.approved) {
+                    guard wallpaper.project.approved == true else { return false }
+                }
+                if activeShowOnly.contains(.myFavourites) {
+                    guard FavoritesManager.shared.isFavorite(wallpaper.id) else { return false }
+                }
+                if activeShowOnly.contains(.customizable) {
+                    guard let props = wallpaper.project.general?.properties,
+                          !props.items.isEmpty else { return false }
+                }
+                if activeShowOnly.contains(.mobileCompatible) {
+                    let tags = (wallpaper.project.tags ?? []).map { $0.lowercased() }
+                    guard tags.contains(where: { $0.contains("mobile") }) else { return false }
+                }
+                if activeShowOnly.contains(.audioResponsive) {
+                    let tags = (wallpaper.project.tags ?? []).map { $0.lowercased() }
+                    guard tags.contains(where: { $0.contains("audio") }) else { return false }
+                }
+            }
             
             var type = FRType.none
             switch wallpaper.project.type.lowercased() {
@@ -202,11 +253,17 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
     
     public var autoRefreshWallpapers: [WEWallpaper] {
-        sortedWallpapers
+        let all = sortedWallpapers
+        guard wallpapersPerPage > 0 else { return all }
+        let startIndex = (currentPage - 1) * wallpapersPerPage
+        guard startIndex < all.count else { return [] }
+        let endIndex = min(startIndex + wallpapersPerPage, all.count)
+        return Array(all[startIndex..<endIndex])
     }
-    
+
     var maxPage: Int {
-        Int(self.filteredWallpapers.count / self.wallpapersPerPage)
+        guard wallpapersPerPage > 0 else { return 1 }
+        return max(1, Int(ceil(Double(self.sortedWallpapers.count) / Double(self.wallpapersPerPage))))
     }
     
     func toggleFilter() {

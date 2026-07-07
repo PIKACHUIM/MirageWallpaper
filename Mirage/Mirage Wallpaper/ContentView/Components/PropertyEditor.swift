@@ -146,7 +146,9 @@ struct PropertyRow: View {
     }
 }
 
-// Wallpaper Engine 属性标签可能包含 HTML。
+// Wallpaper Engine 属性标签可能包含 HTML（含图片、链接等），用 WKWebView 完整渲染。
+// 通过自定义 WKWebView 子类把滚轮事件转发给父级 ScrollView，避免吞掉滚动；
+// 并禁用 WKWebView 自身滚动，靠 JS 测量高度自适应。
 struct HTMLLabel: View {
     let html: String
     @State private var height: CGFloat = 20
@@ -158,13 +160,20 @@ struct HTMLLabel: View {
     }
 }
 
+private final class PassThroughWKWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) {
+        // 不让 webview 自身滚动，转发给上一级响应者（SwiftUI 的 ScrollView）。
+        nextResponder?.scrollWheel(with: event)
+    }
+}
+
 private struct HTMLWebView: NSViewRepresentable {
     let html: String
     @Binding var height: CGFloat
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = PassThroughWKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         return webView
@@ -199,12 +208,22 @@ private struct HTMLWebView: NSViewRepresentable {
         init(_ parent: HTMLWebView) { self.parent = parent }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let js = "Math.ceil(document.body.scrollHeight)"
+            measure(webView)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!, error: Error?) {
+            measure(webView)
+        }
+
+        private func measure(_ webView: WKWebView) {
+            let js = "(function(){return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);})()"
             webView.evaluateJavaScript(js) { result, _ in
-                if let h = result as? CGFloat, h > 0 {
+                let h: CGFloat?
+                if let v = result as? CGFloat { h = v }
+                else if let n = result as? NSNumber { h = CGFloat(truncating: n) }
+                else { h = nil }
+                if let h, h > 0 {
                     DispatchQueue.main.async { self.parent.height = h }
-                } else if let n = result as? NSNumber {
-                    DispatchQueue.main.async { self.parent.height = CGFloat(truncating: n) }
                 }
             }
         }
