@@ -1729,8 +1729,16 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
 
     auto& vfs = *context.vfs;
 
-    // coloBlendMode load passthrough manaully
-    if (wpimgobj.colorBlendMode != 0) {
+    auto has_runtime_effect = [&]() {
+        for (const auto& wpeffobj : wpimgobj.effects) {
+            if (wpeffobj.visible || ! wpeffobj.visible_user.empty()) return true;
+        }
+        return false;
+    };
+
+    const bool use_final_shader_color_blend =
+        wpimgobj.colorBlendMode != 0 && (! wpimgobj.copybackground || has_runtime_effect());
+    if (use_final_shader_color_blend) {
         wpscene::ImageEffect colorEffect;
         wpscene::Material    colorMat;
         nlohmann::json       json;
@@ -1851,7 +1859,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     ShaderValueMap    baseConstSvs = context.global_base_uniforms;
     WPShaderInfo      shaderInfo;
     wpscene::Material image_wpmat = wpimgobj.material;
-    ApplyCopyBackgroundColorBlend(image_wpmat, wpimgobj);
+    if (! hasEffect) ApplyCopyBackgroundColorBlend(image_wpmat, wpimgobj);
     ApplyUserTextureBindings(context, image_wpmat);
     {
         svData.propagate_parallax_to_children = ! wpimgobj.disablepropagation;
@@ -2006,7 +2014,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                     alignment_offset);
     }
     // material blendmode for last step to use
-    auto finalMaterialState = material;
+    if (use_final_shader_color_blend) finalMaterialState.blenmode = BlendMode::Disable;
     // disable img material blend, as it's the first effect node now
     if (hasEffect) {
         material.blenmode = BlendMode::Normal;
