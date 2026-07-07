@@ -914,16 +914,6 @@ BlendMode ParseBlendMode(std::string_view str) {
     return bm;
 }
 
-bool UseCopyBackgroundShaderBlend(const wpscene::ImageObject& image) {
-    return image.copybackground && image.colorBlendMode != 0;
-}
-
-void ApplyCopyBackgroundColorBlend(wpscene::Material& material, const wpscene::ImageObject& image) {
-    if (! UseCopyBackgroundShaderBlend(image)) return;
-    material.combos[std::string(WE_CB_BLENDMODE)] = image.colorBlendMode;
-    material.blending                             = "disabled";
-}
-
 bool IsLegacyAtmosphereMaterial(const wpscene::Material& material) {
     return material.shader == "workshop/2839476907/effects/atmosphere";
 }
@@ -1736,8 +1726,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         return false;
     };
 
-    const bool use_final_shader_color_blend =
-        wpimgobj.colorBlendMode != 0 && (! wpimgobj.copybackground || has_runtime_effect());
+    const bool use_final_shader_color_blend = wpimgobj.colorBlendMode != 0;
     if (use_final_shader_color_blend) {
         wpscene::ImageEffect colorEffect;
         wpscene::Material    colorMat;
@@ -1859,7 +1848,6 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     ShaderValueMap    baseConstSvs = context.global_base_uniforms;
     WPShaderInfo      shaderInfo;
     wpscene::Material image_wpmat = wpimgobj.material;
-    if (! hasEffect) ApplyCopyBackgroundColorBlend(image_wpmat, wpimgobj);
     ApplyUserTextureBindings(context, image_wpmat);
     {
         svData.propagate_parallax_to_children = ! wpimgobj.disablepropagation;
