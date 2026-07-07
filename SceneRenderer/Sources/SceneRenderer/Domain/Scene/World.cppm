@@ -1073,7 +1073,12 @@ public:
     }
     const auto& FirstTarget() const { return m_pingpong_a; }
     SceneMesh&  FinalMesh() const { return *m_final_mesh; }
-    void        SetFullscreen(bool value) {
+    void        AddPrefillNode(SceneImageEffectNode node) {
+        m_prefill_nodes.push_back(std::move(node));
+        m_resolved = false;
+    }
+    auto& PrefillNodes() { return m_prefill_nodes; }
+    void  SetFullscreen(bool value) {
         fullscreen = value;
         m_resolved = false;
     }
