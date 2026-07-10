@@ -8,9 +8,6 @@ import rstd.cppstd;
 import sr.vulkan;
 import sr.scene;
 
-import :buffer_resolver;
-import :resource;
-
 namespace sr::vulkan
 {
 
@@ -110,7 +107,7 @@ RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request) {
             if (! m_dynamic_buffer.allocateSubRef(vertex.CapacitySizeOf(), out.dynamic_vertices[i]))
                 return std::nullopt;
         } else {
-            auto ref = mesh_cache.QueryOrUpload(MeshCacheKey { &vertex, vertex.DataGeneration() },
+            auto ref = mesh_cache.QueryOrUpload({ &vertex, vertex.DataGeneration() },
                                                 bytesOf(vertex.Data(), vertex.CapacitySizeOf()));
             if (! ref) return std::nullopt;
             out.static_vertices.push_back(std::move(*ref));
@@ -126,7 +123,7 @@ RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request) {
             if (! m_dynamic_buffer.allocateSubRef(index.CapacitySizeof(), out.dynamic_index))
                 return std::nullopt;
         } else {
-            auto ref = mesh_cache.QueryOrUpload(MeshCacheKey { &index, index.DataGeneration() },
+            auto ref = mesh_cache.QueryOrUpload({ &index, index.DataGeneration() },
                                                 bytesOf(index.Data(), index.CapacitySizeof()));
             if (! ref) return std::nullopt;
             out.static_index = std::move(*ref);
@@ -142,11 +139,7 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(const DrawBufferRequest& req
     if (request.mesh == nullptr) return false;
     SceneMesh& mesh          = *request.mesh;
     const auto submesh_index = request.submesh_index;
-    // The port's SceneMesh dirty model folds data mutations onto the single
-    // boolean Dirty() flag (see TODO(4b41483) in World.cppm). The upstream
-    // bitfield check `(DirtyFlags() & SceneMeshDirtyData) == 0` maps onto
-    // `!Dirty().load()` here.
-    if (! mesh.Dirty().load(std::memory_order_relaxed)) return true;
+    if ((mesh.DirtyFlags() & SceneMeshDirtyData) == 0) return true;
     if (submesh_index >= mesh.Submeshes().size()) return true;
 
     const auto& submesh           = mesh.Submeshes()[submesh_index];
@@ -182,7 +175,7 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(const DrawBufferRequest& req
         buffers.draw_count = static_cast<u32>(submesh.vertex_arrays[0].VertexCount());
     }
 
-    (void)mesh.ConsumeDirtyFlags(SceneMesh::SceneMeshDirtyData);
+    (void)mesh.ConsumeDirtyFlags(SceneMeshDirtyData);
     return true;
 }
 

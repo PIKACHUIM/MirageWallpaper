@@ -9,14 +9,14 @@ import sr.scene;
 import sr.rgraph;
 
 export import :vulkan_pass;
+export import :shader_reflection_cache;
 export import :resource;
+export import :buffer_resolver;
 export import :pass_common;
 export import :copy_pass;
 export import :custom_shader_pass;
 export import :fin_pass;
 export import :pre_pass;
-export import :buffer_resolver;
-export import :shader_reflection_cache;
 
 export namespace sr
 {
@@ -35,7 +35,7 @@ struct RenderInitInfo {
 
     std::span<const std::uint8_t> uuid;
     TexTiling                     offscreen_tiling { TexTiling::OPTIMAL };
-    VulkanSurfaceInfo surface_info;
+    VulkanSurfaceInfo             surface_info;
 
     uint16_t    width { 1920 };
     uint16_t    height { 1080 };
@@ -48,11 +48,39 @@ struct RenderInitInfo {
 };
 
 std::unique_ptr<rg::RenderGraph> sceneToRenderGraph(Scene&);
+std::unique_ptr<rg::RenderGraph> sceneToRenderGraph(Scene&, const RenderSceneSnapshot&);
 
 namespace vulkan
 {
 
 class FinPass;
+
+enum class RenderGraphResourceRetention
+{
+    KeepSceneTextures,
+    ReleaseSceneTextures,
+};
+
+struct PreparedPassDiagnostic {
+    bool                                      frame_pass { false };
+    std::optional<rg::NodeID>                 graph_node;
+    std::string                               pass_name;
+    std::optional<rg::PassNode::Type>         pass_type;
+    std::optional<RenderItemId>               render_item;
+    PassInvalidationFlags                     invalidation_flags { PassInvalidationNone };
+    std::optional<PipelineCacheKey>           pipeline_cache_key;
+    bool                                      pipeline_cache_hit { false };
+    uint64_t                                  pipeline_cache_observed_count { 0 };
+    std::optional<RenderPassCacheKey>         render_pass_cache_key;
+    bool                                      render_pass_cache_hit { false };
+    uint64_t                                  render_pass_cache_observed_count { 0 };
+    std::optional<FramebufferCacheKey>        framebuffer_cache_key;
+    bool                                      framebuffer_cache_hit { false };
+    uint64_t                                  framebuffer_cache_observed_count { 0 };
+    std::vector<std::string>                  release_textures;
+    std::vector<PassTextureRequestDiagnostic> texture_requests;
+    bool                                      prepared { false };
+};
 
 class VulkanRender {
 public:
@@ -65,9 +93,23 @@ public:
 
     void drawFrame(Scene&);
 
-    void clearLastRenderGraph();
-    void clearTransientRenderGraphResources();
+    void clearLastRenderGraph(
+        RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);
     void compileRenderGraph(Scene&, rg::RenderGraph&);
+    void compileRenderGraph(Scene&, rg::RenderGraph&, const RenderSceneSnapshot&);
+    void refreshPreparedResources(Scene&);
+    void refreshPreparedResources(Scene&, const RenderSceneSnapshot&);
+    void invalidatePreparedRenderItems(std::span<const RenderItemId>, PassInvalidationFlags);
+    void refreshPreparedRenderItems(Scene&, const RenderSceneSnapshot&,
+                                    std::span<const RenderItemId>, PassInvalidationFlags);
+    void refreshPreparedMaterial(Scene&, const RenderSceneSnapshot&, SceneMaterialId,
+                                 PassInvalidationFlags);
+    bool refreshPreparedMaterialTextures(Scene&, const RenderSceneSnapshot&, SceneMaterialId);
+    bool refreshPreparedMaterialTextures(Scene&, const RenderSceneSnapshot&,
+                                         std::span<const SceneMaterialId>);
+    void refreshPreparedMesh(Scene&, const RenderSceneSnapshot&, SceneMeshId,
+                             PassInvalidationFlags);
+    std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
     // Free unreferenced MeshCache entries. Call when the scene set changes
     // (RenderSetScene); skip for swapchain-only rebuilds where the same
     // SceneMesh set survives.

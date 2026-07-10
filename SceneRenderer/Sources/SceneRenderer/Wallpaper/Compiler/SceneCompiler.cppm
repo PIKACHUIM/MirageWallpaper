@@ -12,10 +12,10 @@ import sr.pkg.scene_obj;
 export namespace sr
 {
 
-class WallpaperSceneCompiler {
+class WPSceneParser {
 public:
-    WallpaperSceneCompiler()  = default;
-    ~WallpaperSceneCompiler() = default;
+    WPSceneParser()  = default;
+    ~WPSceneParser() = default;
 
     // Legacy entry; defaults pkg version to unknown. Routes to the 5-arg form.
     std::shared_ptr<Scene> Parse(std::string_view scene_id, const std::string& buf, fs::VFS& vfs,

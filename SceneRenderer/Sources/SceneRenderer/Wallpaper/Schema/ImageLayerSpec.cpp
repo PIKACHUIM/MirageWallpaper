@@ -188,14 +188,14 @@ bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
 }
 
 std::optional<ImageAssetInfo> sr::wpscene::LoadImageAssetInfo(fs::VFS&         vfs,
-                                                              std::string_view image) {
+                                                               std::string_view image) {
     nlohmann::json j_image;
     if (! sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + std::string(image)), j_image))
         return std::nullopt;
 
     ImageAssetInfo info;
-    int32_t        w = 0;
-    int32_t        h = 0;
+    sr::GetJsonValue(j_image, "solidlayer", info.solid_layer, false);
+    int32_t w = 0, h = 0;
     if (j_image.contains("width") && j_image.contains("height")) {
         sr::GetJsonValue(j_image, "width", w, false);
         sr::GetJsonValue(j_image, "height", h, false);
@@ -246,6 +246,7 @@ bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersio
         }
     }
     sr::GetJsonValue(jImage, "nopadding", nopadding, false);
+    sr::GetJsonValue(jImage, "solidlayer", solid_layer, false);
     sr::GetJsonValue(json, "color", color, false);
     ReadUserValueBinding(json, "color", color_user);
     color_user_key = color_user.name;

@@ -1,5 +1,6 @@
 module;
 
+#include <atomic>
 #include <climits>
 #include <initializer_list>
 
@@ -93,6 +94,62 @@ public:
     ShaderValues                 default_uniforms;
 };
 
+inline std::size_t SceneShaderStageCodeHash(const ShaderCode& code) {
+    std::size_t seed { 0 };
+    utils::hash_combine(seed, code.size());
+    for (auto word : code) utils::hash_combine(seed, word);
+    return seed;
+}
+
+inline std::size_t SceneShaderCodeHash(std::span<const ShaderCode> codes) {
+    std::size_t seed { 0 };
+    utils::hash_combine(seed, codes.size());
+    for (const auto& code : codes) utils::hash_combine(seed, SceneShaderStageCodeHash(code));
+    return seed;
+}
+
+inline std::size_t SceneShaderCodeHash(const SceneShader& shader) {
+    return SceneShaderCodeHash(shader.codes);
+}
+
+struct SceneShaderTextureCompileInfo {
+    bool                enabled { false };
+    std::array<bool, 3> components { false, false, false };
+};
+
+struct SceneShaderVariantStage {
+    ShaderType                    stage { ShaderType::VERTEX };
+    std::string                   source_key;
+    std::string                   source;
+    Set<unsigned>                 active_texture_slots;
+    Map<std::string, std::string> uniforms;
+    std::size_t                   code_hash { 0 };
+};
+
+struct SceneShaderDefaultTexture {
+    i32         slot { 0 };
+    std::string texture;
+};
+
+struct SceneShaderVariantDesc {
+    std::string scene_id;
+    std::string shader_name;
+
+    Map<std::string, std::string>          input_combos;
+    Map<std::string, std::string>          resolved_combos;
+    Map<std::string, std::string>          uniform_aliases;
+    ShaderValues                           default_uniforms;
+    std::vector<SceneShaderDefaultTexture> default_textures;
+    std::vector<std::string>               texture_slots;
+
+    std::vector<SceneShaderTextureCompileInfo> texture_infos;
+    std::vector<SceneShaderVariantStage>       stages;
+    std::size_t                                descriptor_layout_hash { 0 };
+    bool                                       geometry_shader_enabled { false };
+
+    bool Valid() const { return ! shader_name.empty() && ! stages.empty(); }
+};
+
 // ============================================================================
 // SceneTexture.h
 // ============================================================================
@@ -160,6 +217,7 @@ public:
     void Assign(usize index, std::span<const uint32_t> data) {
         if (! IncreaseCheckSet((index + data.size()) * Unit_Byte_Size)) return;
         std::copy(data.begin(), data.end(), m_pData + index);
+        BumpDataGeneration();
     }
 
     const uint32_t* Data() const { return m_pData; }
@@ -171,23 +229,16 @@ public:
     }
     void SetRenderDataCount(usize val) noexcept { m_render_size = val; }
 
-    usize CapacityCount() const { return m_capacity; }
-    usize CapacitySizeof() const { return m_capacity * Unit_Byte_Size; }
+    usize    CapacityCount() const { return m_capacity; }
+    usize    CapacitySizeof() const { return m_capacity * Unit_Byte_Size; }
+    uint64_t DataGeneration() const { return m_generation; }
 
     uint32_t ID() const { return m_id; }
     void     SetID(uint32_t id) { m_id = id; }
 
-    // TODO(4b41483): upstream tracks a real per-array data generation counter
-    // (bumped on every Assign/mutation) used by RenderBufferResolver's static
-    // mesh-cache key. The port now mirrors that via m_generation +
-    // BumpDataGeneration() so the resolver's cache key coarsely tracks data
-    // mutations (a single counter rather than upstream's per-stream granularity
-    // for the index array, which only has one stream anyway).
-    uint64_t DataGeneration() const noexcept { return m_generation; }
-    void     BumpDataGeneration() noexcept { ++m_generation; }
-
 private:
     bool IncreaseCheckSet(size_t size);
+    void BumpDataGeneration() noexcept { ++m_generation; }
 
     uint32_t* m_pData;
     usize     m_size;
@@ -196,7 +247,7 @@ private:
     usize m_render_size { std::numeric_limits<usize>::max() };
 
     uint32_t m_id { std::numeric_limits<uint32_t>::max() };
-    uint64_t m_generation { 0 };
+    uint64_t m_generation { 1 };
 };
 
 // ============================================================================
@@ -242,6 +293,7 @@ public:
     usize        CapacitySizeOf() const { return m_capacity * sizeof(float); }
     usize        OneSize() const { return m_oneSize; }
     usize        OneSizeOf() const { return m_oneSize * sizeof(float); }
+    uint64_t     DataGeneration() const { return m_generation; }
 
     const auto&                                  Attributes() const { return m_attributes; }
     Map<std::string, SceneVertexAttributeOffset> GetAttrOffsetMap() const;
@@ -252,14 +304,9 @@ public:
     static uint8_t TypeCount(VertexType);
     static uint8_t RealAttributeSize(const SceneVertexAttribute&);
 
-    // TODO(4b41483): see SceneIndexArray::DataGeneration — same model. The
-    // port bumps a single per-stream counter on every mutation; upstream
-    // carries the same per-stream counter so this matches.
-    uint64_t DataGeneration() const noexcept { return m_generation; }
-    void     BumpDataGeneration() noexcept { ++m_generation; }
-
 private:
     bool TrySetSize(usize) noexcept;
+    void BumpDataGeneration() noexcept { ++m_generation; }
 
     std::vector<SceneVertexAttribute> m_attributes;
 
@@ -271,7 +318,7 @@ private:
     usize  m_capacity { 0 };
 
     uint32_t m_id;
-    uint64_t m_generation { 0 };
+    uint64_t m_generation { 1 };
 };
 
 // Build a SceneVertexAttribute vector from compile-time VertexAttrSpec literals.
@@ -305,6 +352,7 @@ struct SceneMaterialCustomShader {
     std::shared_ptr<SceneShader>                shader;
     ShaderValues                                constValues;
     Map<std::string, SceneShaderValueAnimation> valueAnimations;
+    std::optional<SceneShaderVariantDesc>       variant;
     // Set when constValues was mutated outside of prepare()/parse — e.g. a
     // RenderSetUserProperty handler writing a new user-property value. The
     // pass's per-frame update_op picks this up, re-writes the affected cbuffer
@@ -312,14 +360,227 @@ struct SceneMaterialCustomShader {
     bool dirty { false };
 };
 
+enum class SceneMaterialTextureDependency
+{
+    Empty,
+    Imported,
+    RenderTarget,
+    LinkRenderTarget,
+    MipMappedFramebuffer,
+};
+
+inline SceneMaterialTextureDependency ClassifySceneMaterialTexture(std::string_view texture) {
+    if (texture.empty()) return SceneMaterialTextureDependency::Empty;
+    if (IsSpecLinkTex(texture)) return SceneMaterialTextureDependency::LinkRenderTarget;
+    if (sstart_with(texture, WE_MIP_MAPPED_FRAME_BUFFER))
+        return SceneMaterialTextureDependency::MipMappedFramebuffer;
+    if (IsSpecTex(texture)) return SceneMaterialTextureDependency::RenderTarget;
+    return SceneMaterialTextureDependency::Imported;
+}
+
+inline bool IsLocalSceneMaterialTextureDependency(SceneMaterialTextureDependency dep) {
+    return dep == SceneMaterialTextureDependency::Empty ||
+           dep == SceneMaterialTextureDependency::Imported;
+}
+
+inline bool CanRefreshSceneMaterialTextureBinding(std::string_view old_texture,
+                                                  std::string_view new_texture,
+                                                  std::string_view pass_output = {}) {
+    if (old_texture == new_texture) return true;
+    if ((! old_texture.empty() && old_texture == pass_output) ||
+        (! new_texture.empty() && new_texture == pass_output))
+        return false;
+    auto old_dep = ClassifySceneMaterialTexture(old_texture);
+    auto new_dep = ClassifySceneMaterialTexture(new_texture);
+    return IsLocalSceneMaterialTextureDependency(old_dep) &&
+           IsLocalSceneMaterialTextureDependency(new_dep);
+}
+
+using SceneMaterialDirtyFlags = uint32_t;
+
+enum class SceneMaterialDirty : SceneMaterialDirtyFlags
+{
+    Resources = 1u << 0u,
+    Pipeline  = 1u << 1u,
+    Graph     = 1u << 2u,
+};
+
+inline constexpr SceneMaterialDirtyFlags SceneMaterialDirtyNone { 0u };
+inline constexpr SceneMaterialDirtyFlags SceneMaterialDirtyResources {
+    static_cast<SceneMaterialDirtyFlags>(SceneMaterialDirty::Resources),
+};
+inline constexpr SceneMaterialDirtyFlags SceneMaterialDirtyPipeline {
+    static_cast<SceneMaterialDirtyFlags>(SceneMaterialDirty::Pipeline),
+};
+inline constexpr SceneMaterialDirtyFlags SceneMaterialDirtyGraph {
+    static_cast<SceneMaterialDirtyFlags>(SceneMaterialDirty::Graph),
+};
+inline constexpr SceneMaterialDirtyFlags SceneMaterialDirtyAll {
+    SceneMaterialDirtyResources | SceneMaterialDirtyPipeline | SceneMaterialDirtyGraph,
+};
+
+inline bool SceneShaderVariantHasActiveTextureMetadata(const SceneShaderVariantDesc& desc) {
+    for (const auto& stage : desc.stages) {
+        if (! stage.active_texture_slots.empty()) return true;
+    }
+    return false;
+}
+
+inline Set<unsigned> SceneShaderVariantActiveTextureSlots(const SceneShaderVariantDesc& desc) {
+    Set<unsigned> slots;
+    for (const auto& stage : desc.stages) {
+        slots.insert(stage.active_texture_slots.begin(), stage.active_texture_slots.end());
+    }
+    return slots;
+}
+
+inline Map<std::string, std::string>
+SceneShaderVariantUniformLayout(const SceneShaderVariantDesc& desc) {
+    Map<std::string, std::string> uniforms;
+    for (const auto& stage : desc.stages) {
+        for (const auto& [name, ty] : stage.uniforms) uniforms[name] = ty;
+    }
+    return uniforms;
+}
+
+inline bool SameSceneShaderVariantStageSet(const SceneShaderVariantDesc& lhs,
+                                           const SceneShaderVariantDesc& rhs) {
+    if (lhs.stages.size() != rhs.stages.size()) return false;
+    for (usize i = 0; i < lhs.stages.size(); ++i) {
+        if (lhs.stages[i].stage != rhs.stages[i].stage) return false;
+    }
+    return true;
+}
+
+inline bool SameSceneShaderVariantUniformShape(const SceneShaderVariantDesc& lhs,
+                                               const SceneShaderVariantDesc& rhs) {
+    auto lhs_layout = SceneShaderVariantUniformLayout(lhs);
+    auto rhs_layout = SceneShaderVariantUniformLayout(rhs);
+    if (! lhs_layout.empty() || ! rhs_layout.empty()) return lhs_layout == rhs_layout;
+
+    if (lhs.default_uniforms.size() != rhs.default_uniforms.size()) return false;
+    for (const auto& [name, value] : lhs.default_uniforms) {
+        auto it = rhs.default_uniforms.find(name);
+        if (it == rhs.default_uniforms.end() || it->second.size() != value.size()) return false;
+    }
+    return true;
+}
+
+inline bool SceneShaderVariantHasCodeHashes(const SceneShaderVariantDesc& desc) {
+    for (const auto& stage : desc.stages) {
+        if (stage.code_hash != 0) return true;
+    }
+    return false;
+}
+
+inline bool SameSceneShaderVariantCodeHashes(const SceneShaderVariantDesc& lhs,
+                                             const SceneShaderVariantDesc& rhs) {
+    const bool lhs_has_hashes = SceneShaderVariantHasCodeHashes(lhs);
+    const bool rhs_has_hashes = SceneShaderVariantHasCodeHashes(rhs);
+    if (! lhs_has_hashes && ! rhs_has_hashes) return true;
+    if (lhs.stages.size() != rhs.stages.size()) return false;
+    for (usize i = 0; i < lhs.stages.size(); ++i) {
+        if (lhs.stages[i].code_hash != rhs.stages[i].code_hash) return false;
+    }
+    return true;
+}
+
+inline bool SameSceneShaderVariantDescriptorLayout(const SceneShaderVariantDesc& lhs,
+                                                   const SceneShaderVariantDesc& rhs) {
+    if (lhs.descriptor_layout_hash == 0 && rhs.descriptor_layout_hash == 0) return true;
+    return lhs.descriptor_layout_hash == rhs.descriptor_layout_hash;
+}
+
+inline SceneMaterialDirtyFlags
+ClassifySceneShaderVariantMutation(const SceneShaderVariantDesc& current,
+                                   const SceneShaderVariantDesc& next) {
+    if (! current.Valid() || ! next.Valid()) return SceneMaterialDirtyGraph;
+    if (current.shader_name != next.shader_name) return SceneMaterialDirtyGraph;
+    if (SceneShaderVariantHasActiveTextureMetadata(current) ||
+        SceneShaderVariantHasActiveTextureMetadata(next)) {
+        if (SceneShaderVariantActiveTextureSlots(current) !=
+            SceneShaderVariantActiveTextureSlots(next))
+            return SceneMaterialDirtyGraph;
+    }
+
+    SceneMaterialDirtyFlags flags = SceneMaterialDirtyNone;
+    if (! SameSceneShaderVariantStageSet(current, next)) flags |= SceneMaterialDirtyPipeline;
+    if (! SameSceneShaderVariantUniformShape(current, next)) {
+        flags |= SceneMaterialDirtyResources | SceneMaterialDirtyPipeline;
+    }
+    if (current.resolved_combos != next.resolved_combos ||
+        current.input_combos != next.input_combos ||
+        current.texture_infos.size() != next.texture_infos.size() ||
+        current.geometry_shader_enabled != next.geometry_shader_enabled) {
+        flags |= SceneMaterialDirtyResources | SceneMaterialDirtyPipeline;
+    }
+    if (! SameSceneShaderVariantCodeHashes(current, next)) flags |= SceneMaterialDirtyPipeline;
+    if (! SameSceneShaderVariantDescriptorLayout(current, next)) {
+        flags |= SceneMaterialDirtyResources | SceneMaterialDirtyPipeline;
+    }
+    if (flags == SceneMaterialDirtyNone && current.stages.size() == next.stages.size()) {
+        for (usize i = 0; i < current.stages.size(); ++i) {
+            if (current.stages[i].source_key != next.stages[i].source_key ||
+                current.stages[i].source != next.stages[i].source) {
+                flags |= SceneMaterialDirtyPipeline;
+                break;
+            }
+        }
+    }
+    return flags;
+}
+
 struct SceneMaterial {
 public:
-    SceneMaterial()                                = default;
-    SceneMaterial(const SceneMaterial&)            = default;
-    SceneMaterial(SceneMaterial&&) noexcept        = default;
-    SceneMaterial& operator=(const SceneMaterial&) = default;
-    SceneMaterial& operator=(SceneMaterial&&)      = default;
+    SceneMaterial() = default;
+    SceneMaterial(const SceneMaterial& other) { copyFrom(other); }
+    SceneMaterial(SceneMaterial&& other) noexcept { moveFrom(std::move(other)); }
+    SceneMaterial& operator=(const SceneMaterial& other) {
+        if (this != &other) copyFrom(other);
+        return *this;
+    }
+    SceneMaterial& operator=(SceneMaterial&& other) noexcept {
+        if (this != &other) moveFrom(std::move(other));
+        return *this;
+    }
 
+    void SetDirty(SceneMaterialDirtyFlags flags) { m_dirty_flags.fetch_or(flags); }
+    void SetResourceDirty() { SetDirty(SceneMaterialDirtyResources); }
+    void SetPipelineDirty() { SetDirty(SceneMaterialDirtyPipeline); }
+    void SetGraphDirty() { SetDirty(SceneMaterialDirtyGraph); }
+    SceneMaterialDirtyFlags DirtyFlags() const { return m_dirty_flags.load(); }
+    SceneMaterialDirtyFlags
+    ConsumeDirtyFlags(SceneMaterialDirtyFlags mask = SceneMaterialDirtyAll) {
+        SceneMaterialDirtyFlags old = m_dirty_flags.load();
+        while (! m_dirty_flags.compare_exchange_weak(old, old & ~mask)) {
+        }
+        return old & mask;
+    }
+
+    bool SetBlendMode(BlendMode value) {
+        if (blenmode == value) return false;
+        blenmode = value;
+        SetPipelineDirty();
+        return true;
+    }
+    bool SetDepthTest(bool value) {
+        if (depth_test == value) return false;
+        depth_test = value;
+        SetPipelineDirty();
+        return true;
+    }
+    bool SetDepthWrite(bool value) {
+        if (depth_write == value) return false;
+        depth_write = value;
+        SetPipelineDirty();
+        return true;
+    }
+    bool SetCullMode(CullMode value) {
+        if (cull_mode == value) return false;
+        cull_mode = value;
+        SetPipelineDirty();
+        return true;
+    }
     bool SetShaderValue(std::string uniform_name, const ShaderValue& value) {
         if (uniform_name.empty()) return false;
         auto shaped                            = ShapeShaderValue(uniform_name, value);
@@ -334,6 +595,26 @@ public:
     bool SetShaderValueAnimation(std::string                          uniform_name,
                                  std::shared_ptr<SceneAnimationCurve> curve);
     bool TickShaderValueAnimations(double runtime);
+    bool SetShaderVariant(std::shared_ptr<SceneShader> shader, SceneShaderVariantDesc variant) {
+        if (! shader || ! variant.Valid()) return false;
+        SceneMaterialDirtyFlags flags =
+            customShader.variant.has_value()
+                ? ClassifySceneShaderVariantMutation(*customShader.variant, variant)
+                : SceneMaterialDirtyGraph;
+        if (flags == SceneMaterialDirtyNone) return false;
+        if (! variant.texture_slots.empty() &&
+            SceneShaderVariantHasActiveTextureMetadata(variant)) {
+            textures    = variant.texture_slots;
+            auto active = SceneShaderVariantActiveTextureSlots(variant);
+            for (usize i = 0; i < textures.size(); ++i) {
+                if (! active.contains(static_cast<unsigned>(i))) textures[i].clear();
+            }
+        }
+        customShader.shader  = std::move(shader);
+        customShader.variant = std::move(variant);
+        SetDirty(flags);
+        return true;
+    }
 
     std::string              name;
     std::vector<std::string> textures;
@@ -367,11 +648,57 @@ private:
         std::vector<float> shaped(target_size, value[0]);
         return ShaderValue(std::span<const float>(shaped));
     }
+
+    void copyFrom(const SceneMaterial& other) {
+        name         = other.name;
+        textures     = other.textures;
+        defines      = other.defines;
+        hasSprite    = other.hasSprite;
+        customShader = other.customShader;
+        blenmode     = other.blenmode;
+        depth_test   = other.depth_test;
+        depth_write  = other.depth_write;
+        cull_mode    = other.cull_mode;
+        m_dirty_flags.store(other.m_dirty_flags.load());
+    }
+    void moveFrom(SceneMaterial&& other) {
+        name         = std::move(other.name);
+        textures     = std::move(other.textures);
+        defines      = std::move(other.defines);
+        hasSprite    = other.hasSprite;
+        customShader = std::move(other.customShader);
+        blenmode     = other.blenmode;
+        depth_test   = other.depth_test;
+        depth_write  = other.depth_write;
+        cull_mode    = other.cull_mode;
+        m_dirty_flags.store(other.m_dirty_flags.load());
+    }
+
+    std::atomic<SceneMaterialDirtyFlags> m_dirty_flags { SceneMaterialDirtyNone };
 };
 
 // ============================================================================
 // SceneMesh.h
 // ============================================================================
+
+using SceneMeshDirtyFlags = uint32_t;
+
+enum class SceneMeshDirty : SceneMeshDirtyFlags
+{
+    Data   = 1u << 0u,
+    Layout = 1u << 1u,
+};
+
+inline constexpr SceneMeshDirtyFlags SceneMeshDirtyNone { 0u };
+inline constexpr SceneMeshDirtyFlags SceneMeshDirtyData {
+    static_cast<SceneMeshDirtyFlags>(SceneMeshDirty::Data),
+};
+inline constexpr SceneMeshDirtyFlags SceneMeshDirtyLayout {
+    static_cast<SceneMeshDirtyFlags>(SceneMeshDirty::Layout),
+};
+inline constexpr SceneMeshDirtyFlags SceneMeshDirtyAll {
+    SceneMeshDirtyData | SceneMeshDirtyLayout,
+};
 
 class SceneMesh {
 public:
@@ -387,7 +714,7 @@ public:
 
     // = glTF "primitive": one vertex-stream set + one index array + one
     // material slot. A SceneMesh holds >= 1 Submesh; today most paths emit
-    // exactly one (single-slot compat); WallpaperSceneCompiler will emit N for
+    // exactly one (single-slot compat); WPSceneParser will emit N for
     // .mdl meshes with mesh_count > 1.
     struct Submesh {
         std::vector<SceneVertexArray> vertex_arrays;
@@ -410,23 +737,19 @@ public:
     bool        Dynamic() const { return m_dynamic; }
     const auto& Dirty() const { return m_dirty; }
     auto&       Dirty() { return m_dirty; }
-    void        SetDirty() { m_dirty.store(true); }
-
-    // TODO(4b41483): upstream SceneMesh carries a bitfield dirty-mask
-    // (SceneMeshDirtyData / SceneMeshDirtyLayout) consumed by
-    // RenderBufferResolver::updateDynamicDrawBuffers. The port's SceneMesh
-    // only has a single boolean dirty flag, so these adapters fold every
-    // data-mutation onto that flag. When the real bitfield model is ported,
-    // replace these wrappers.
-    using SceneMeshDirtyFlags = uint32_t;
-    static constexpr SceneMeshDirtyFlags SceneMeshDirtyData { 1u << 0u };
-    SceneMeshDirtyFlags                  DirtyFlags() const {
-        return m_dirty.load(std::memory_order_relaxed) ? SceneMeshDirtyData : 0u;
+    void        SetDirty(SceneMeshDirtyFlags flags = SceneMeshDirtyData) {
+        m_dirty_flags.fetch_or(flags);
+        m_dirty.store(true);
     }
-    void SetLayoutDirty() { SetDirty(); }
-    SceneMeshDirtyFlags ConsumeDirtyFlags(SceneMeshDirtyFlags /*mask*/) {
-        bool was = m_dirty.exchange(false, std::memory_order_relaxed);
-        return was ? SceneMeshDirtyData : 0u;
+    void                SetLayoutDirty() { SetDirty(SceneMeshDirtyLayout); }
+    SceneMeshDirtyFlags DirtyFlags() const { return m_dirty_flags.load(); }
+    SceneMeshDirtyFlags ConsumeDirtyFlags(SceneMeshDirtyFlags mask = SceneMeshDirtyAll) {
+        SceneMeshDirtyFlags old = m_dirty_flags.load();
+        while (! m_dirty_flags.compare_exchange_weak(old, old & ~mask)) {
+        }
+        auto consumed = old & mask;
+        if ((old & ~mask) == SceneMeshDirtyNone) m_dirty.store(false);
+        return consumed;
     }
 
     uint32_t ID() const { return m_id; };
@@ -505,6 +828,7 @@ private:
 
     std::shared_ptr<Data>                       m_data;      // shared via ChangeMeshDataFrom
     std::vector<std::shared_ptr<SceneMaterial>> m_materials; // per-instance
+    std::atomic<SceneMeshDirtyFlags>            m_dirty_flags { SceneMeshDirtyNone };
 };
 
 class SceneNode;
@@ -720,7 +1044,7 @@ public:
 // Lifetime invariant — tree topology is frozen post-parse.
 //
 // `m_children` / `m_parent` are written only during parse-time construction
-// (WallpaperSceneCompiler AppendChild / SpawnLayerClones). Once `Scene` is shipped to
+// (WPSceneParser AppendChild / SpawnLayerClones). Once `Scene` is shipped to
 // the render thread via `RenderSetScene`, no code adds, removes, or reorders
 // nodes. The only exception is `SetParentAnchor`, used by
 // SceneImageEffectLayer::ResolveEffect to re-anchor an effect's composite
@@ -968,12 +1292,13 @@ public:
     // BFS over self + descendants; returns first node whose Name() matches.
     SceneNode* FindByName(std::string_view name);
 
+    i32  ID() const { return m_id; }
     i32& ID() { return m_id; }
 
 private:
     void MarkTransDirty();
 
-    i32         m_id;
+    i32         m_id { -1 };
     std::string m_name;
 
     bool            m_dirty;
@@ -1043,6 +1368,7 @@ struct SceneImageEffect {
         std::string src;
         i32         afterpos { 0 };
     };
+    std::string                     name;
     std::vector<Command>            commands;
     std::list<SceneImageEffectNode> nodes;
     SceneUserVisibilityBinding      visible_user_binding;
@@ -1064,9 +1390,15 @@ public:
         m_resolved             = false;
         return true;
     }
-    std::size_t EffectCount() const { return m_effects.size(); }
-    auto&       GetEffect(std::size_t index) { return m_effects.at(index); }
-    bool        HasRuntimeVisibleEffect() const {
+    std::size_t                       EffectCount() const { return m_effects.size(); }
+    auto&                             GetEffect(std::size_t index) { return m_effects.at(index); }
+    std::shared_ptr<SceneImageEffect> FindEffect(std::string_view name) {
+        auto it = std::find_if(m_effects.begin(), m_effects.end(), [name](const auto& effect) {
+            return effect && effect->name == name;
+        });
+        return it == m_effects.end() ? nullptr : *it;
+    }
+    bool HasRuntimeVisibleEffect() const {
         return std::any_of(m_effects.begin(), m_effects.end(), [](const auto& effect) {
             return effect && effect->runtime_visible;
         });
@@ -1098,8 +1430,12 @@ public:
         m_resolved     = false;
     }
     const auto& FinalTarget() const { return m_final_target; }
-    void        SetSkipWhenNoRuntimeEffect(bool value) { m_skip_when_no_runtime_effect = value; }
-    bool        SkipWhenNoRuntimeEffect() const { return m_skip_when_no_runtime_effect; }
+    void        SetFinalLocal(bool value) {
+        m_final_local = value;
+        m_resolved    = false;
+    }
+    void SetSkipWhenNoRuntimeEffect(bool value) { m_skip_when_no_runtime_effect = value; }
+    bool SkipWhenNoRuntimeEffect() const { return m_skip_when_no_runtime_effect; }
 
     // Idempotent: second and later calls are no-ops until any of the
     // mutating setters above (or AddEffect) flips m_resolved back to false.
@@ -1113,6 +1449,7 @@ private:
     std::string m_pingpong_b;
 
     bool                       fullscreen { false };
+    bool                       m_final_local { false };
     std::unique_ptr<SceneMesh> m_final_mesh;
     BlendMode                  m_final_blend;
     bool                       m_final_depth_test { false };
@@ -1123,6 +1460,12 @@ private:
     bool                       m_resolved { false };
 
     std::vector<std::shared_ptr<SceneImageEffect>> m_effects;
+    std::vector<SceneImageEffectNode>              m_prefill_nodes;
+};
+
+struct SceneImageEffectRef {
+    SceneImageEffectLayer*            layer { nullptr };
+    std::shared_ptr<SceneImageEffect> effect;
 };
 
 // ============================================================================
@@ -1149,7 +1492,7 @@ struct ScenePostProcess {
 };
 
 // SceneLight + SceneLightType live in the `sr.scene:lighting` partition
-// (see Model/Lighting/Lighting.cppm).
+// (see src/Scene/Lighting/Lighting.cppm).
 
 // ============================================================================
 // Particle.h
@@ -1626,13 +1969,13 @@ public:
 };
 
 // ============================================================================
-// ParticleGeometryBuilder.h
+// WPParticleRawGener.h
 // ============================================================================
 
-class ParticleGeometryBuilder : public IParticleRawGener {
+class WPParticleRawGener : public IParticleRawGener {
 public:
-    ParticleGeometryBuilder() {};
-    virtual ~ParticleGeometryBuilder() {};
+    WPParticleRawGener() {};
+    virtual ~WPParticleRawGener() {};
 
     virtual void GenGLData(std::span<const std::unique_ptr<ParticleInstance>>, SceneMesh&,
                            ParticleRawGenSpecOp&);
@@ -1680,6 +2023,266 @@ public:
     virtual ImageHeader            ParseHeader(const std::string&) = 0;
 };
 
+struct SceneNodeId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneMaterialId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneMeshId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneDrawItemId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneTextureId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneRenderTargetId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct SceneCameraId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint32_t generation { 0 };
+};
+
+struct WallpaperLayerId {
+    i32 value { -1 };
+};
+
+struct SceneLayerId {
+    i32      value { -1 };
+    uint32_t generation { 0 };
+};
+
+struct SceneDrawItemRecord {
+    SceneDrawItemId id;
+    SceneNodeId     node;
+    SceneMeshId     mesh;
+    SceneMaterialId material;
+    uint32_t        submesh_index { 0 };
+};
+
+struct DrawItemView {
+    SceneNode*                node { nullptr };
+    SceneMesh*                mesh { nullptr };
+    const SceneMesh::Submesh* submesh { nullptr };
+    SceneMaterial*            material { nullptr };
+    uint32_t                  submesh_index { 0 };
+};
+
+class SceneResourceIndex : NoCopy, NoMove {
+public:
+    SceneResourceIndex() = default;
+
+    void Rebuild(Scene& scene, uint32_t generation);
+
+    uint32_t Generation() const { return m_generation; }
+    bool     Empty() const { return m_scene == nullptr; }
+
+    std::span<const SceneDrawItemRecord> DrawItems() const {
+        return { m_draw_items.data(), m_draw_items.size() };
+    }
+    std::span<SceneNode* const> Nodes() const { return { m_nodes.data(), m_nodes.size() }; }
+
+    std::optional<SceneNodeId>         nodeId(const SceneNode& node) const;
+    std::optional<SceneMeshId>         meshId(const SceneMesh& mesh) const;
+    std::optional<SceneMaterialId>     materialId(const SceneMaterial& material) const;
+    std::optional<SceneDrawItemId>     drawItemFor(SceneNodeId node, uint32_t submesh_index) const;
+    std::optional<SceneTextureId>      textureId(std::string_view url) const;
+    std::optional<SceneRenderTargetId> renderTargetId(std::string_view key) const;
+    std::optional<SceneCameraId>       cameraId(std::string_view name) const;
+
+    std::optional<DrawItemView>     resolve(SceneDrawItemId id) const;
+    SceneNode*                      node(SceneNodeId id) const;
+    SceneMesh*                      mesh(SceneMeshId id) const;
+    SceneMaterial*                  material(SceneMaterialId id) const;
+    const SceneTexture*             texture(SceneTextureId id) const;
+    const SceneRenderTarget*        renderTarget(SceneRenderTargetId id) const;
+    SceneRenderTarget*              mutableRenderTarget(SceneRenderTargetId id) const;
+    SceneCamera*                    camera(SceneCameraId id) const;
+    std::span<SceneMesh* const>     Meshes() const { return { m_meshes.data(), m_meshes.size() }; }
+    std::span<SceneMaterial* const> Materials() const {
+        return { m_materials.data(), m_materials.size() };
+    }
+
+private:
+    Scene*   m_scene { nullptr };
+    uint32_t m_generation { 0 };
+
+    std::vector<SceneNode*>          m_nodes;
+    std::vector<SceneMesh*>          m_meshes;
+    std::vector<SceneMaterial*>      m_materials;
+    std::vector<std::string>         m_texture_keys;
+    std::vector<std::string>         m_render_target_keys;
+    std::vector<std::string>         m_camera_keys;
+    std::vector<SceneDrawItemRecord> m_draw_items;
+
+    std::unordered_map<const SceneNode*, SceneNodeId>         m_node_ids;
+    std::unordered_map<const SceneMesh*, SceneMeshId>         m_mesh_ids;
+    std::unordered_map<const SceneMaterial*, SceneMaterialId> m_material_ids;
+    std::unordered_map<std::string, SceneTextureId>           m_texture_ids;
+    std::unordered_map<std::string, SceneRenderTargetId>      m_render_target_ids;
+    std::unordered_map<std::string, SceneCameraId>            m_camera_ids;
+};
+
+struct RenderSceneVersion {
+    uint64_t value { 0 };
+};
+
+struct RenderItemId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint64_t generation { 0 };
+};
+
+struct RenderTextureDescId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint64_t generation { 0 };
+};
+
+struct RenderTargetDescId {
+    uint32_t index { std::numeric_limits<uint32_t>::max() };
+    uint64_t generation { 0 };
+};
+
+struct RenderItemRecord {
+    RenderItemId                      id;
+    SceneDrawItemId                   scene_draw_item;
+    SceneNodeId                       scene_node;
+    SceneMeshId                       scene_mesh;
+    SceneMaterialId                   scene_material;
+    WallpaperLayerId                  source_layer;
+    uint32_t                          submesh_index { 0 };
+    std::optional<RenderTargetDescId> output_override;
+};
+
+struct RenderTextureDescRecord {
+    RenderTextureDescId id;
+    SceneTextureId      scene_texture;
+    std::string         key;
+    SceneTexture        desc;
+};
+
+struct RenderTargetDescRecord {
+    RenderTargetDescId  id;
+    SceneRenderTargetId scene_render_target;
+    std::string         key;
+    SceneRenderTarget   desc;
+};
+
+struct RenderLinkSourceRecord {
+    WallpaperLayerId   source_layer;
+    std::string        render_target_key;
+    RenderTargetDescId render_target;
+};
+
+struct SceneMeshDirtyEvent {
+    SceneMeshId         mesh;
+    SceneMeshDirtyFlags flags { SceneMeshDirtyNone };
+};
+
+struct SceneMaterialDirtyEvent {
+    SceneMaterialId         material;
+    SceneMaterialDirtyFlags flags { SceneMaterialDirtyNone };
+};
+
+struct SceneMaterialTextureSlotMutation {
+    bool                           changed { false };
+    std::optional<SceneMaterialId> material;
+};
+
+struct SceneShaderVariantMutation {
+    std::shared_ptr<SceneShader> shader;
+    SceneShaderVariantDesc       variant;
+};
+
+struct SceneMaterialShaderVariantMutation {
+    bool                           changed { false };
+    std::optional<SceneMaterialId> material;
+};
+
+enum class SceneUserPropertyDiagnosticCode
+{
+    SceneVfsUnavailable,
+    UnsupportedShaderComboValue,
+    MissingShaderVariantDescriptor,
+    ShaderComboCompileFailed,
+};
+
+struct SceneUserPropertyDiagnostic {
+    std::string                     key;
+    SceneUserPropertyDiagnosticCode code {
+        SceneUserPropertyDiagnosticCode::UnsupportedShaderComboValue
+    };
+    std::string material;
+    std::string combo;
+    std::string message;
+};
+
+class RenderSceneSnapshot {
+public:
+    RenderSceneSnapshot() = default;
+
+    void Rebuild(Scene& scene, RenderSceneVersion version);
+
+    RenderSceneVersion Version() const { return m_version; }
+
+    std::span<const RenderItemRecord> RenderItems() const {
+        return { m_render_items.data(), m_render_items.size() };
+    }
+    std::span<const RenderTextureDescRecord> TextureDescs() const {
+        return { m_texture_descs.data(), m_texture_descs.size() };
+    }
+    std::span<const RenderTargetDescRecord> RenderTargetDescs() const {
+        return { m_render_target_descs.data(), m_render_target_descs.size() };
+    }
+
+    const RenderItemRecord*        renderItem(RenderItemId id) const;
+    const RenderTextureDescRecord* textureDesc(RenderTextureDescId id) const;
+    const RenderTargetDescRecord*  renderTargetDesc(RenderTargetDescId id) const;
+
+    std::optional<RenderItemId>        renderItemFor(SceneDrawItemId id) const;
+    std::optional<RenderTextureDescId> textureDescId(std::string_view key) const;
+    std::optional<RenderTargetDescId>  renderTargetDescId(std::string_view key) const;
+    std::span<const RenderItemId>      renderItemsFor(WallpaperLayerId id) const;
+    std::span<const RenderItemId>      renderItemsFor(SceneMaterialId id) const;
+    std::span<const RenderItemId>      renderItemsFor(SceneMeshId id) const;
+    const RenderLinkSourceRecord*      linkSource(WallpaperLayerId id) const;
+    const Set<i32>&                    LinkedLayerIds() const { return m_linked_layer_ids; }
+    bool                               HasLinkConsumer(WallpaperLayerId id) const;
+
+private:
+    RenderSceneVersion m_version;
+
+    std::vector<RenderItemRecord>        m_render_items;
+    std::vector<RenderTextureDescRecord> m_texture_descs;
+    std::vector<RenderTargetDescRecord>  m_render_target_descs;
+
+    std::unordered_map<uint64_t, RenderItemId>              m_render_item_ids;
+    std::unordered_map<std::string, RenderTextureDescId>    m_texture_desc_ids;
+    std::unordered_map<std::string, RenderTargetDescId>     m_render_target_desc_ids;
+    std::unordered_map<i32, std::vector<RenderItemId>>      m_source_layer_items;
+    std::unordered_map<uint64_t, std::vector<RenderItemId>> m_material_render_items;
+    std::unordered_map<uint64_t, std::vector<RenderItemId>> m_mesh_render_items;
+    std::vector<RenderLinkSourceRecord>                     m_link_sources;
+    std::unordered_map<i32, uint32_t>                       m_link_source_ids;
+    Set<i32>                                                m_linked_layer_ids;
+};
+
+RenderSceneSnapshot ExtractRenderSceneSnapshot(Scene& scene);
+
 // ============================================================================
 // Scene.h
 // ============================================================================
@@ -1705,6 +2308,8 @@ public:
     //     passthrough on `_rt_default` — only useful as a link snapshot
     //     point if referenced).
     Set<i32> elidable_layer_ids;
+    Set<i32> static_elidable_layer_ids;
+    Set<i32> visibility_elidable_layer_ids;
 
     std::vector<std::unique_ptr<SceneLight>> lights;
 
@@ -1716,6 +2321,14 @@ public:
     // a per-frame walk over the scene tree.
     Map<std::string, std::vector<std::pair<class SceneMaterial*, std::string>>>
         shader_user_var_index;
+
+    struct ShaderComboUserBinding {
+        SceneMaterial*                material { nullptr };
+        std::string                   combo;
+        std::string                   fallback;
+        Map<std::string, std::string> options;
+    };
+    Map<std::string, std::vector<ShaderComboUserBinding>> shader_combo_user_index;
 
     // user-property key → list of (override state, field name) pairs for the
     // particle layers whose instanceoverride was authored as `{user:"<key>"}`.
@@ -1740,15 +2353,27 @@ public:
     Map<std::string, std::vector<ImagePropertyBinding>> image_color_user_index;
     Map<std::string, std::vector<ImagePropertyBinding>> image_alpha_user_index;
 
+    struct MaterialTextureUserBinding {
+        SceneMaterial* material { nullptr };
+        uint32_t       slot { 0 };
+        std::string    fallback;
+    };
+    Map<std::string, std::vector<MaterialTextureUserBinding>> material_texture_user_index;
+
     Map<std::string, std::vector<std::string>> camera_parallax_user_var_index;
 
     Map<std::string, std::vector<std::string>> camera_shake_user_var_index;
 
     Map<std::string, std::vector<std::shared_ptr<SceneCameraPath>>> camera_path_user_index;
 
-    // Apply a user-property update to every visibility binding of the named
-    // kind. Each returns whether anything flipped such that the render graph
-    // must be rebuilt.
+    std::optional<SceneImageEffectRef> FindNodeImageEffect(const SceneNode& node,
+                                                           std::string_view name);
+    bool SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool visible);
+    bool ConsumeRenderGraphDirty() {
+        bool dirty           = m_render_graph_dirty;
+        m_render_graph_dirty = false;
+        return dirty;
+    }
     bool ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property);
     bool ApplyUserImageEffectVisibilityBindings(std::string_view      key,
                                                 const nlohmann::json& property);
@@ -1771,9 +2396,8 @@ public:
     std::unique_ptr<void, VFSDeleterFn> vfs;
 
     // Same opaque-pointer pattern for the per-Scene scenescript runtime.
-    // The concrete type is `sr::script::ScriptScene` (defined in
-    // SceneRendererScript), but Scene itself lives in SceneRendererBase which
-    // sits upstream of script support, so we keep it opaque here. The renderer
+    // The concrete type is `sr::script::ScriptScene`, but Scene itself sits
+    // below the script runtime, so we keep it opaque here. The renderer
     // ticks it once per frame via `sr::script::TickSceneScripts`.
     using ScriptDeleterFn = void (*)(void*) noexcept;
     std::unique_ptr<void, ScriptDeleterFn> script_scene { nullptr, [](void*) noexcept {
@@ -1826,9 +2450,40 @@ public:
         }
     }
 
-    void TickCameraPaths();
-    void TickMaterialShaderAnimations();
-    void CaptureCameraPathViewports();
+    void        TickCameraPaths();
+    void        TickMaterialShaderAnimations();
+    void        CaptureCameraPathViewports();
+    std::string EnsureLinkRenderTarget(WallpaperLayerId source_layer, const SceneNode& source_node);
+    bool        EnsureTextureDescriptor(std::string_view key);
+    bool        SetMaterialShaderValue(SceneMaterial& material, std::string_view uniform_name,
+                                       const ShaderValue& value);
+    SceneMaterialTextureSlotMutation SetMaterialTextureSlot(SceneMaterial& material, uint32_t slot,
+                                                            std::string_view texture);
+    SceneMaterialShaderVariantMutation
+         SetMaterialShaderVariant(SceneMaterial& material, SceneShaderVariantMutation mutation);
+    void MarkLayerStaticElidable(WallpaperLayerId id);
+    void MarkLayerVisibilityElidable(WallpaperLayerId id);
+    bool SetNodeVisible(SceneNode& node, bool visible);
+    std::vector<SceneMeshDirtyEvent>     ConsumePreparedMeshDirtyEvents();
+    std::vector<SceneMaterialDirtyEvent> ConsumePreparedMaterialDirtyEvents();
+    void                                 ClearUserPropertyDiagnostics(std::string_view key);
+    void AddUserPropertyDiagnostic(SceneUserPropertyDiagnostic diagnostic);
+    std::span<const SceneUserPropertyDiagnostic> UserPropertyDiagnostics() const {
+        return { m_user_property_diagnostics.data(), m_user_property_diagnostics.size() };
+    }
+
+    void                      RebuildResourceIndex();
+    SceneResourceIndex&       ResourceIndex() { return m_resource_index; }
+    const SceneResourceIndex& ResourceIndex() const { return m_resource_index; }
+    uint32_t                  ResourceGeneration() const { return m_resource_generation; }
+
+private:
+    void RebuildElidableLayerIds();
+
+    uint32_t                                 m_resource_generation { 0 };
+    SceneResourceIndex                       m_resource_index;
+    bool                                     m_render_graph_dirty { false };
+    std::vector<SceneUserPropertyDiagnostic> m_user_property_diagnostics;
 };
 
 } // namespace sr

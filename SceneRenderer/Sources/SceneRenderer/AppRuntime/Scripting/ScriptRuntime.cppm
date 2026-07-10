@@ -84,10 +84,6 @@ struct FrameInputs {
     uint32_t mouse_buttons_released { 0 };
 };
 
-// Snapshot of host media playback state, pushed in via JsRuntime::SetMediaStatus
-// (host → runtime). Mirrors the WE `MediaPlaybackEvent` JS enum for `state`;
-// the string fields feed the `mediaPropertiesChanged` / `mediaThumbnailChanged`
-// script callbacks. `art_url` is resolved as a texture key by the renderer.
 struct MediaStatus {
     uint32_t    state { 0 };
     std::string title;
@@ -149,6 +145,7 @@ public:
 
     // Install the Scene root that backs `thisScene`. `thisScene.getLayer(name)`
     // searches from this node. Call once per scene after parsing finishes.
+    void SetScene(sr::Scene* scene);
     void SetSceneRoot(sr::SceneNode* root);
 
     // Wire localStorage to a JSON file. Existing keys load synchronously;
@@ -166,10 +163,7 @@ public:
     void SetUserProperty(std::string_view key, const nlohmann::json& property);
 
     // Dispatch Wallpaper Engine media callbacks for the current media
-    // snapshot. Call from the renderer owner thread. Fans out
-    // `mediaPlaybackChanged` / `mediaPropertiesChanged` /
-    // `mediaThumbnailChanged` to every live FieldScript that exports them,
-    // edge-detecting changes so unchanged snapshots are no-ops.
+    // snapshot. Call from the renderer owner thread.
     void SetMediaStatus(const MediaStatus& status);
 
     using BoneIndexResolver = std::function<uint32_t(sr::SceneNode*, std::string_view)>;
@@ -286,9 +280,6 @@ void TickSceneScripts(sr::Scene& scene, const FrameInputs& fi);
 // No-op when the scene has no script runtime.
 void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const nlohmann::json& property);
 
-// Forward a media-status snapshot to the ScriptScene attached to `scene`,
-// dispatching the WE media callbacks. No-op when the scene has no script
-// runtime.
 void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status);
 
 // Forward `SetPersistence` to the ScriptScene attached to `scene`. No-op

@@ -136,8 +136,7 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
         VkImageMemoryBarrier in_bar {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                              VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -147,7 +146,7 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
         VkImageMemoryBarrier out_bar {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = 0,
+            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -155,9 +154,7 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
             .subresourceRange = srang,
         };
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                VK_PIPELINE_STAGE_TRANSFER_BIT |
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_DEPENDENCY_BY_REGION_BIT,
                             {},

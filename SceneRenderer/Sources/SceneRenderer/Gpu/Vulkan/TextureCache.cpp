@@ -653,7 +653,6 @@ private:
 
 wavsen::video::HwAccel ParseHwdec(std::string_view value) {
     if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
-    if (value == "vaapi") return wavsen::video::HwAccel::Vaapi;
     if (value == "videotoolbox") return wavsen::video::HwAccel::VideoToolbox;
     if (value == "none") return wavsen::video::HwAccel::None;
     return wavsen::video::HwAccel::Auto;
@@ -663,9 +662,9 @@ const char* HwdecLabel(wavsen::video::HwAccel h) {
     switch (h) {
     case wavsen::video::HwAccel::Auto: return "auto";
     case wavsen::video::HwAccel::Vulkan: return "vulkan";
-    case wavsen::video::HwAccel::Vaapi: return "vaapi";
     case wavsen::video::HwAccel::VideoToolbox: return "videotoolbox";
     case wavsen::video::HwAccel::None: return "none";
+    default: break;
     }
     return "?";
 }
@@ -674,16 +673,15 @@ const char* FrameKindLabel(wavsen::video::FrameKind k) {
     switch (k) {
     case wavsen::video::FrameKind::Sw: return "sw";
     case wavsen::video::FrameKind::VulkanShared: return "vulkan-shared";
-    case wavsen::video::FrameKind::VaapiDrm: return "vaapi-drm";
     case wavsen::video::FrameKind::VideoToolboxSw: return "videotoolbox-sw";
+    default: break;
     }
     return "?";
 }
 
 bool NeedsSharedVulkanProducer(wavsen::video::HwAccel hwdec) {
 #if defined(__APPLE__)
-    return hwdec == wavsen::video::HwAccel::Vulkan ||
-           hwdec == wavsen::video::HwAccel::Vaapi;
+    return hwdec == wavsen::video::HwAccel::Vulkan;
 #else
     return hwdec != wavsen::video::HwAccel::None;
 #endif
@@ -1043,7 +1041,16 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
 
         const auto                  fkind = s.decoder->kind();
         wavsen::video::VkFrameView  vkv {};
-        wavsen::video::DrmFrameView drmv {};
+        const bool supported_frame_kind =
+            fkind == wavsen::video::FrameKind::VulkanShared ||
+            fkind == wavsen::video::FrameKind::Sw ||
+            fkind == wavsen::video::FrameKind::VideoToolboxSw;
+        if (! supported_frame_kind) {
+            rstd_error("PumpVideoTextures[{}]: unsupported decoded frame kind {}",
+                       s.key,
+                       FrameKindLabel(fkind));
+            continue;
+        }
 
         /* Drain decoded frames until we catch up to wall time. Cap to
          * 4 frames per tick to avoid spiral-of-death on heavy stalls. */
@@ -1055,11 +1062,11 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                 rstd::Ok(wavsen::video::NextFrame::Ok);
             switch (fkind) {
             case wavsen::video::FrameKind::VulkanShared: r = s.decoder->next_vk_frame(vkv); break;
-            case wavsen::video::FrameKind::VaapiDrm: r = s.decoder->next_drm_frame(drmv); break;
             case wavsen::video::FrameKind::Sw: r = s.decoder->next_frame(s.nv12_scratch); break;
             case wavsen::video::FrameKind::VideoToolboxSw:
                 r = s.decoder->next_frame(s.nv12_scratch);
                 break;
+            default: break;
             }
             if (r.is_err()) {
                 rstd_error("PumpVideoTextures[{}]: decode {}: {}",
@@ -1070,21 +1077,31 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             }
             auto kind = r.unwrap();
             if (kind == wavsen::video::NextFrame::Eof) {
-                s.pts_acc  = 0.0;
-                s.last_pts = -1.0;
+                s.pts_acc    = 0.0;
+                s.last_pts   = -1.0;
+                s.pts_origin = std::numeric_limits<double>::quiet_NaN();
                 break;
+            }
+            const bool decoder_looped = kind == wavsen::video::NextFrame::Looped;
+            if (decoder_looped) {
+                s.pts_origin = std::numeric_limits<double>::quiet_NaN();
+                s.last_pts   = -1.0;
             }
             double frame_pts = -1.0;
             switch (fkind) {
             case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
-            case wavsen::video::FrameKind::VaapiDrm: frame_pts = drmv.pts_seconds; break;
             case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
             case wavsen::video::FrameKind::VideoToolboxSw:
                 frame_pts = s.nv12_scratch.pts_seconds;
                 break;
+            default: break;
             }
             advance_slot_pts(s, frame_pts);
             got_new = true;
+            if (decoder_looped) {
+                s.pts_acc = std::max(s.last_pts, 0.0);
+                break;
+            }
         }
         if (! got_new && s.have_frame) continue; /* nothing to upload */
         if (! got_new) continue;
@@ -1096,15 +1113,12 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             cs_id = vkv.colorspace;
             cr_id = vkv.color_range;
             break;
-        case wavsen::video::FrameKind::VaapiDrm:
-            cs_id = drmv.colorspace;
-            cr_id = drmv.color_range;
-            break;
         case wavsen::video::FrameKind::Sw:
         case wavsen::video::FrameKind::VideoToolboxSw:
             cs_id = s.nv12_scratch.colorspace;
             cr_id = s.nv12_scratch.color_range;
             break;
+        default: break;
         }
         const auto color_matrix =
             wavsen::video::make_color_matrix(static_cast<wavsen::video::ColorSpace>(cs_id),
@@ -1174,16 +1188,10 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                                                        ip.handle,
                                                        s.width,
                                                        s.height,
-                                                       color_matrix);
+                                                       color_matrix,
+                                                       wavsen::video::ConvertTarget::SampledLocal);
             break;
         }
-        case wavsen::video::FrameKind::VaapiDrm:
-            cv = yuv->convert_drm_prime(drmv,
-                                        ip.handle,
-                                        s.width,
-                                        s.height,
-                                        color_matrix);
-            break;
         case wavsen::video::FrameKind::Sw:
         case wavsen::video::FrameKind::VideoToolboxSw:
             cv = yuv->convert_nv12(ip.handle,
@@ -1191,8 +1199,10 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                                    s.height,
                                    s.nv12_scratch.data.data(),
                                    s.nv12_scratch.data.size(),
-                                   color_matrix);
+                                   color_matrix,
+                                   wavsen::video::ConvertTarget::SampledLocal);
             break;
+        default: break;
         }
         if (cv.is_err()) {
             rstd_error("PumpVideoTextures[{}]: yuv conversion {}: {}",

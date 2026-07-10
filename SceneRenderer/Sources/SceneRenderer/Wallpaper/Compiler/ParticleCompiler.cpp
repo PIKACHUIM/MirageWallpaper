@@ -37,7 +37,7 @@ inline Vector3d GenRandomVec3(const std::array<float, 3>& min, const std::array<
 
 inline float UiColorToLinear(float value) { return value * value; }
 
-inline float UiScalarToLinear(float value) { return value * value; }
+inline float UiScalarToLinear(float value) { return value; }
 
 } // namespace
 
@@ -93,7 +93,7 @@ std::array<float, N> mapVertex(const std::array<float, N>& v, float (*oper)(floa
     return result;
 };
 
-ParticleInitOp ParticleProgramCompiler::genParticleInitOp(const nlohmann::json& wpj) {
+ParticleInitOp WPParticleParser::genParticleInitOp(const nlohmann::json& wpj) {
     using namespace std::placeholders;
     do {
         if (! wpj.contains("name")) break;
@@ -202,7 +202,7 @@ ParticleInitOp ParticleProgramCompiler::genParticleInitOp(const nlohmann::json& 
 }
 
 ParticleInitOp
-ParticleProgramCompiler::genOverrideInitOp(std::shared_ptr<const wpscene::ParticleInstanceoverride> over) {
+WPParticleParser::genOverrideInitOp(std::shared_ptr<const wpscene::ParticleInstanceoverride> over) {
     return [over = std::move(over)](Particle& p, double) {
         PM::MutiplyInitLifeTime(p, over->lifetime);
         PM::MutiplyInitAlpha(p, UiScalarToLinear(over->alpha));
@@ -437,7 +437,7 @@ struct ControlPointForce {
     };
 };
 
-ParticleOperatorOp ParticleProgramCompiler::genParticleOperatorOp(
+ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
     const nlohmann::json&                                    wpj,
     std::shared_ptr<const wpscene::ParticleInstanceoverride> over_state) {
     do {
@@ -627,7 +627,7 @@ ParticleOperatorOp ParticleProgramCompiler::genParticleOperatorOp(
     };
 }
 
-ParticleEmittOp ParticleProgramCompiler::genParticleEmittOp(const wpscene::Emitter& wpe, bool sort) {
+ParticleEmittOp WPParticleParser::genParticleEmittOp(const wpscene::Emitter& wpe, bool sort) {
     ParticleAudioResponse audio_response {
         .enable    = wpe.audioprocessingmode != 0,
         .amount    = wpe.audioamount,

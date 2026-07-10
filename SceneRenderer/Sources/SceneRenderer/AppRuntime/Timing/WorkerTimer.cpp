@@ -19,8 +19,6 @@ void ThreadTimer::Start() {
     std::unique_lock<std::mutex> lock(m_op_mutex);
 
     if (Running()) return;
-    if (m_timer_thread.joinable()) m_timer_thread.join();
-    m_running = true;
     m_timer_thread = std::thread([this]() {
         while (Running()) {
             {
@@ -30,16 +28,14 @@ void ThreadTimer::Start() {
             if (m_callback) m_callback();
         }
     });
+    m_running      = true;
 }
 
 void ThreadTimer::Stop() {
     std::unique_lock<std::mutex> lock(m_op_mutex);
     rstd_assert(std::this_thread::get_id() != m_timer_thread.get_id());
 
-    if (! Running()) {
-        if (m_timer_thread.joinable()) m_timer_thread.join();
-        return;
-    }
+    if (! Running()) return;
     m_running = false;
 
     {

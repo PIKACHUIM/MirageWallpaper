@@ -10,7 +10,7 @@ import sr.pkg.scene_obj;
 export namespace sr
 {
 
-class SoundAssetCompiler {
+class WPSoundParser {
 public:
     static std::shared_ptr<SceneSoundControl> Parse(const wpscene::SoundObject&, fs::VFS&,
                                                     wavsen::audio::SoundManager&, Scene*);

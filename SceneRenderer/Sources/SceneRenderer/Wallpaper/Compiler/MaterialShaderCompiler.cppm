@@ -45,6 +45,7 @@ struct WPShaderInfo {
     // bridge for `u_*` uniforms read the vectors below.
     std::vector<wpscene::WPCombo>      combo_defs;
     std::vector<wpscene::WPUniformTex> texture_uniforms;
+    std::vector<wpscene::WPUniformVar> scalar_uniforms;
 
     // Filled by LoadMaterial for the direct-binding u_* route. The
     // scene-instance-level user-binding route (effect-key → wallpaper-key)
@@ -89,13 +90,22 @@ struct CompileMaterialShaderResult {
     std::string                  shader_name;
 };
 
+struct CompileSceneShaderVariantResult {
+    bool                         ok { false };
+    std::shared_ptr<SceneShader> shader;
+    SceneShaderVariantDesc       variant;
+    WPShaderInfo                 info;
+    std::vector<WPShaderTexInfo> tex_info;
+    std::string                  error;
+};
+
 // Per-stage shader-annotation parser. Implementation lives in
-// MaterialProgramCompiler backend; declaration here so the rest of the parse
+// WPShaderParser_Pegtl.cpp; declaration here so the rest of the parse
 // module sees it. Not exported — internal helper.
 void ParseWPShader(const std::string& src, WPShaderInfo* info,
                    const std::vector<WPShaderTexInfo>& texinfos);
 
-class MaterialProgramCompiler {
+class WPShaderParser {
 public:
     static std::string PreShaderSrc(fs::VFS&, const std::string& src, WPShaderInfo* pWPShaderInfo,
                                     const std::vector<WPShaderTexInfo>& texs);
@@ -108,6 +118,10 @@ public:
     static bool CompileToSpv(std::string_view         scene_id, std::span<WPShaderUnit>,
                              std::vector<ShaderCode>& spvs, fs::VFS&, WPShaderInfo*,
                              std::span<const WPShaderTexInfo>);
+
+    static void UpdateSceneShaderVariantDescFromCompiledUnits(SceneShaderVariantDesc&,
+                                                              std::span<const WPShaderUnit>,
+                                                              std::span<const ShaderCode>);
 
     // Lightweight entry point: compile the vert+frag shader pair for one
     // material directly, without instantiating a Scene or running the
@@ -128,13 +142,8 @@ public:
                                                              std::string_view scene_id = "test",
                                                              const Combos&    combos_override = {});
 
-    // TODO(4b41483): upstream WPShaderParser adds a CompileSceneShaderVariant
-    // entry point plus UpdateSceneShaderVariantDescFromCompiledUnits, backed by
-    // a SceneShaderVariantDesc / SceneShaderTextureCompileInfo /
-    // SceneShaderDefaultTexture model that the divergent port does not yet
-    // carry (it lands across other commits alongside RenderSceneSnapshot).
-    // Declaring these here would fail to compile without that type surface, so
-    // the variant-compile API is deferred until SceneShaderVariantDesc is
-    // back-ported.
+    static CompileSceneShaderVariantResult
+    CompileSceneShaderVariant(const SceneShaderVariantDesc& desc, fs::VFS& vfs,
+                              const Combos& combos_override = {});
 };
 } // namespace sr

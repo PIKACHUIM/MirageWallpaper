@@ -8,8 +8,8 @@ export namespace wavsen::audio {
 // Source for the audio decoder. Mirrors the rstd::io::Read + rstd::io::Seek
 // trait shape but is exposed as a virtual base so the FFmpeg AVIO C
 // callback (a function pointer) can dispatch back through a single
-// `void*` opaque. Concrete impls in this header (PosixFile) and in OWE
-// (BStreamAdapter wrapping owe::fs::IBinaryStream).
+// `void*` opaque. Concrete impls in this header (PosixFile) and the
+// SceneRenderer adapter wrapping sr::fs::IBinaryStream.
 class IByteStream {
 public:
     virtual ~IByteStream() = default;

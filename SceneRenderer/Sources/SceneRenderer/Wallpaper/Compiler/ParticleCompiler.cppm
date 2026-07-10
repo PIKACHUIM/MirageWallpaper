@@ -11,7 +11,7 @@ export import sr.pkg.scene_obj;
 export namespace sr
 
 {
-class ParticleProgramCompiler {
+class WPParticleParser {
 public:
     static ParticleInitOp genParticleInitOp(const nlohmann::json&);
     static ParticleOperatorOp

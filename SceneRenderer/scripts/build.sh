@@ -8,7 +8,7 @@
 # macOS-only by design:
 #   * MoltenVK is the Vulkan ICD, wavsen uses Core Audio.
 #   * Mach-O @loader_path rpath (no ELF $ORIGIN), system ld (no LLD).
-#   * No conda / mesa / wayland / waywallen / X11 tooling — those are the
+#   * No conda / Mesa / Wayland / X11 tooling — those are the
 #     upstream Linux build's concerns, not ours.
 #
 # Usage:

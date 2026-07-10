@@ -29,10 +29,9 @@ void  SceneRendererMacDesktopPresent(void* handle, void* texture, std::uint32_t 
 std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle);
 std::uint32_t SceneRendererMacDesktopPixelHeight(void* handle);
 
-// NOTE: media-status (mpris) routing is NOT exposed through this C host API.
-// macOS has no mpris; the runtime entry point is
-// `sr::SceneWallpaper::setMediaStatus(sr::MediaStatus)`, which the app layer
-// (owner of the SceneWallpaper) should call from a now-playing observer. See
-// the block comment at the top of MacDesktopHost.mm for the full plan.
+// NOTE: media-status routing is not exposed through this C host API. The
+// runtime entry point is `sr::SceneWallpaper::setMediaStatus(sr::MediaStatus)`,
+// which the app layer (owner of the SceneWallpaper) should call from a
+// now-playing observer.
 
 } // extern "C"

@@ -286,8 +286,8 @@ struct Image : NoCopy, NoMove {
 
 } // namespace sr
 
-// Small OS utility: dlopen/dlsym wrapper. Lives here so Vulkan support
-// can reach it without dragging SceneRendererBase in. hash_combine is co-located
+// Small OS utility — dlopen/dlsym wrapper. Lives here so the Vulkan runtime
+// can reach it without dragging the scene model in. hash_combine is co-located
 // for the same reason (TextureCache key hashing).
 export namespace utils
 {

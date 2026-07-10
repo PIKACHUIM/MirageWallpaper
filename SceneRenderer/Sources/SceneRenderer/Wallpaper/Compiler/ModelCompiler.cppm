@@ -104,7 +104,7 @@ struct WPMdl {
     // uniform mat4x3 g_Bones[BONECOUNT]
 };
 
-class ModelAssetCompiler {
+class WPMdlParser {
 public:
     // Reads only the bytes preceding mat_json_file. Cheap; safe to call
     // over the whole corpus even on mdls that would hang full Parse.

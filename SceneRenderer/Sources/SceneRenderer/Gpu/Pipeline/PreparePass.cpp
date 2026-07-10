@@ -9,7 +9,6 @@ using namespace sr::vulkan;
 
 namespace
 {
-
 std::optional<vvk::RenderPass> CreateMsaaClearPass(const vvk::Device&    device,
                                                    VkSampleCountFlagBits samples) {
     VkAttachmentDescription color {

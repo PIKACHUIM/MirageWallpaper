@@ -76,18 +76,12 @@ enum class TexTiling
 };
 
 // Per-slot frame descriptor consumed by the present path. The local
-// offscreen swapchain fills `id`/`width`/`height`; external-handle fields
-// stay at their sentinels on macOS.
+// offscreen swapchain fills `id`/`width`/`height` on macOS.
 struct ExHandle {
     int         fd { -1 };
     int32_t     width { 0 };
     int32_t     height { 0 };
     std::size_t size { 0 };
-
-    uint32_t drm_fourcc { 0 };
-    uint64_t drm_modifier { 0 };
-    uint64_t plane0_offset { 0 };
-    uint32_t plane0_stride { 0 };
 
     ExHandle() = default;
     ExHandle(int id): m_id(id) {};
@@ -140,9 +134,8 @@ private:
 
 // Producer-side abstraction over the offscreen swapchain.
 //   - LocalVmaExSwapchain: self-allocates 3 Metal-exportable VkImages via
-//     the Vulkan TextureCache; the standalone viewer drives
-//     bind_buffers / frame_ready itself and consumes `eatFrame()` /
-//     `snapshot_all_slots()`.
+//     the Vulkan TextureCache; the standalone viewer consumes `eatFrame()`
+//     / `snapshot_all_slots()` after submit.
 class ExSwapchain {
 public:
     virtual ~ExSwapchain() = default;
@@ -156,7 +149,7 @@ public:
 
     virtual bool acquireRenderTarget(vulkan::ImageParameters& out) = 0;
 
-    virtual void submitRendered(int acquire_sync_fd) = 0;
+    virtual void submitRendered(int sync_marker) = 0;
 
     virtual ExHandle*                eatFrame() { return nullptr; }
     virtual std::array<ExHandle*, 3> snapshot_all_slots() { return { nullptr, nullptr, nullptr }; }
@@ -707,9 +700,9 @@ private:
 // ---------- GraphicsPipeline.hpp ----------
 
 struct PipelineParameters {
-    vvk::Pipeline       handle;
-    vvk::PipelineLayout layout;
-    vvk::RenderPass     pass;
+    vvk::Pipeline                    handle;
+    vvk::PipelineLayout              layout;
+    std::shared_ptr<vvk::RenderPass> pass;
 
     std::vector<vvk::DescriptorSetLayout> descriptor_layouts;
 };
@@ -726,7 +719,7 @@ public:
     ~GraphicsPipeline();
 
     void toDefault();
-    bool create(const Device&, vvk::RenderPass&, PipelineParameters&);
+    bool create(const Device&, VkRenderPass, PipelineParameters&);
 
     VkPipelineMultisampleStateCreateInfo   multisample {};
     VkPipelineRasterizationStateCreateInfo raster {};
@@ -736,6 +729,8 @@ public:
     const auto& pass() const { return m_pass; }
 
     GraphicsPipeline& setColorBlendStates(std::span<const VkPipelineColorBlendAttachmentState>);
+    GraphicsPipeline& setColorBlendOptions(VkPipelineColorBlendStateCreateFlags,
+                                           const std::array<float, 4>&);
     GraphicsPipeline& setLogicOp(bool enable, VkLogicOp);
 
     GraphicsPipeline& setRenderPass(vvk::RenderPass);
@@ -744,11 +739,18 @@ public:
     GraphicsPipeline&
         addInputAttributeDescription(std::span<const VkVertexInputAttributeDescription>);
     GraphicsPipeline& addInputBindingDescription(std::span<const VkVertexInputBindingDescription>);
+    GraphicsPipeline& setCreateInfoOptions(VkPipelineCreateFlags flags, uint32_t subpass);
     GraphicsPipeline& setTopology(VkPrimitiveTopology);
+    GraphicsPipeline& setPrimitiveRestartEnable(bool);
+    GraphicsPipeline& setViewportScissorCount(uint32_t viewport_count, uint32_t scissor_count);
+    GraphicsPipeline& setDynamicStates(std::span<const VkDynamicState>);
     GraphicsPipeline& setSampleCount(VkSampleCountFlagBits);
 
 private:
     vvk::RenderPass m_pass;
+
+    VkPipelineCreateFlags m_create_flags { 0 };
+    uint32_t              m_subpass { 0 };
 
     VkPipelineInputAssemblyStateCreateInfo         m_input_assembly {};
     std::vector<VkVertexInputBindingDescription>   m_input_bind_descriptions;

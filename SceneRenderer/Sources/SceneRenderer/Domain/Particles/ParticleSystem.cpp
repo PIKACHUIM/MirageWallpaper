@@ -231,7 +231,6 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
 
         if (! inst->IsDeath()) {
             for (auto& emittOp : m_emiters) {
-                // m_rate scales particle simulation, not emitter cadence.
                 emittOp(inst->ParticlesVec(),
                         m_initializers,
                         m_maxcount,

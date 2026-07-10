@@ -261,6 +261,10 @@ struct RopeQuadAttrSlots {
     AttrSlot color;
 };
 
+// CPU rope-quad expansion. Metal/MoltenVK has no geometry-shader stage, so on
+// macOS the rope segment fan-out the .geom would do is done here instead: each
+// trail segment becomes four vertices (a quad) with per-corner UVs, matching
+// the non-GS vertex-shader path selected by SetRopeParticleMesh.
 inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail& trail,
                                           const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                           const RopeQuadAttrSlots& slots, SceneVertexArray& sv,
@@ -376,7 +380,7 @@ inline void updateIndexArray(uint32_t index, size_t count, SceneIndexArray& iarr
 }
 } // namespace
 
-void ParticleGeometryBuilder::GenGLData(std::span<const std::unique_ptr<ParticleInstance>> instances,
+void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                    SceneMesh& mesh, ParticleRawGenSpecOp& specOp) {
     auto& sv = mesh.GetVertexArray(0);
 
@@ -384,13 +388,19 @@ void ParticleGeometryBuilder::GenGLData(std::span<const std::unique_ptr<Particle
     opt.thick_format = sv.GetOption(WE_CB_THICK_FORMAT);
 
     if (sv.GetOption(WE_PRENDER_ROPE)) {
+        // Rope/spline. With a geometry shader (POINT primitive) it's one vertex
+        // per segment expanded on the GPU. On macOS (no GS) the mesh is a
+        // TRIANGLE list with an index buffer and the segments are expanded to
+        // quads on the CPU. Reset the active size before regen so the segment
+        // count for this frame isn't masked by a previous frame's high-water
+        // mark.
         sv.ResetSize();
         usize segment_num = 0;
         if (mesh.Primitive() == MeshPrimitive::POINT) {
             segment_num = GenRopeParticleData(instances, specOp, opt, sv);
         } else {
-            segment_num = GenRopeParticleQuadData(instances, specOp, opt, sv);
-            auto& si    = mesh.GetIndexArray(0);
+            segment_num     = GenRopeParticleQuadData(instances, specOp, opt, sv);
+            auto& si        = mesh.GetIndexArray(0);
             u32   index_num = (u32)(si.DataCount() / 6);
             if (segment_num > index_num) {
                 updateIndexArray(index_num, segment_num, si);

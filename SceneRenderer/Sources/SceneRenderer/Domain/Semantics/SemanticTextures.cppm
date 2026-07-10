@@ -149,7 +149,6 @@ inline constexpr std::string_view G_TIME { "g_Time" };
 inline constexpr std::string_view G_FRAMETIME { "g_Frametime" };
 inline constexpr std::string_view G_DAYTIME { "g_Daytime" };
 inline constexpr std::string_view G_DAYTIME_LEGACY { "g_DayTime" };
-inline constexpr std::string_view G_DAYTIME { "g_DayTime" };
 inline constexpr std::string_view G_POINTERPOSITION { "g_PointerPosition" };
 inline constexpr std::string_view G_POINTERPOSITIONLAST { "g_PointerPositionLast" };
 inline constexpr std::string_view G_TEXELSIZE { "g_TexelSize" };

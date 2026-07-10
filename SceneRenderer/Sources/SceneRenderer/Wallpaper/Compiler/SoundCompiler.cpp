@@ -1,8 +1,6 @@
 module;
 
 #include <sys/types.h>
-#include <cstdio>
-#include <cstdlib>
 module sr.pkg.parse;
 import sr.core;
 import sr.scene;
@@ -31,14 +29,6 @@ static PlaybackMode ToPlaybackMode(std::string_view s) {
 
 namespace
 {
-
-bool SoundDebugEnabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("WAVSEN_AUDIO_DEBUG");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
-    return enabled;
-}
 
 // Adapter: sr::fs::IBinaryStream → wavsen::audio::IByteStream.
 class BStreamAdapter : public wavsen::audio::IByteStream {
@@ -142,20 +132,6 @@ public:
             frameReads = m_curActive ? m_curActive->next_pcm(pData, frameCount) : 0;
         }
         UpdateAudioAverage(pData, frameReads);
-        if (SoundDebugEnabled()) {
-            const auto calls = m_debugCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (calls <= 8 || calls % 120 == 0) {
-                std::fprintf(stderr,
-                             "wavsen-audio-debug: WPSoundStream next_pcm call=%llu requested=%u "
-                             "read=%llu active=%d dead=%d playing=%d\n",
-                             static_cast<unsigned long long>(calls),
-                             frameCount,
-                             static_cast<unsigned long long>(frameReads),
-                             m_curActive ? 1 : 0,
-                             m_dead ? 1 : 0,
-                             m_state->playing.load(std::memory_order_relaxed) ? 1 : 0);
-            }
-        }
         {
             float*     pData_float = static_cast<float*>(pData);
             const auto num         = frameReads * m_desc.channels;
@@ -187,15 +163,7 @@ public:
             auto stream  = wavsen::audio::make_stream(std::move(adapter), m_desc);
             if (stream) {
                 m_curActive = std::move(stream);
-                if (SoundDebugEnabled()) {
-                    std::fprintf(stderr, "wavsen-audio-debug: opened sound path '%s'\n",
-                                 path.c_str());
-                }
                 return;
-            }
-            if (SoundDebugEnabled()) {
-                std::fprintf(stderr, "wavsen-audio-debug: failed sound path '%s'\n",
-                             path.c_str());
             }
         }
         m_dead = true;
@@ -265,10 +233,9 @@ private:
     const std::vector<std::string>              m_soundPaths;
     std::unique_ptr<wavsen::audio::SoundStream> m_curActive;
     std::array<std::atomic<float>, 16>*         m_audioAverage { nullptr };
-    std::atomic<std::uint64_t>                  m_debugCalls { 0 };
 };
 
-std::shared_ptr<SceneSoundControl> SoundAssetCompiler::Parse(const wpscene::SoundObject&  obj,
+std::shared_ptr<SceneSoundControl> WPSoundParser::Parse(const wpscene::SoundObject&  obj,
                                                         fs::VFS&                     vfs,
                                                         wavsen::audio::SoundManager& sm,
                                                         Scene*                       scene) {
@@ -281,17 +248,6 @@ std::shared_ptr<SceneSoundControl> SoundAssetCompiler::Parse(const wpscene::Soun
     auto  state         = std::make_shared<WPSoundState>();
     state->playing.store(! obj.startsilent, std::memory_order_release);
     state->volume.store(config.volume, std::memory_order_release);
-    if (SoundDebugEnabled()) {
-        std::fprintf(stderr,
-                     "wavsen-audio-debug: parse sound id=%u name='%s' paths=%zu "
-                     "volume=%.3f startsilent=%d mode=%s\n",
-                     obj.id,
-                     obj.name.c_str(),
-                     obj.sound.size(),
-                     config.volume,
-                     obj.startsilent ? 1 : 0,
-                     obj.playbackmode.c_str());
-    }
     auto control = std::make_shared<WPSoundControl>(state);
     auto ss      = std::make_unique<WPSoundStream>(obj.sound, vfs, config, state, audio_average);
     sm.mount(std::move(ss));

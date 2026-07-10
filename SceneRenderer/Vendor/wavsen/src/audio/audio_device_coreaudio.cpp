@@ -91,7 +91,6 @@ public:
     void uninit() {
         if (! is_inited()) return;
         stop();
-        unmount_all();
         wavsen_coreaudio_output_destroy(output_);
         output_ = nullptr;
         inited_.store(false, std::memory_order_release);

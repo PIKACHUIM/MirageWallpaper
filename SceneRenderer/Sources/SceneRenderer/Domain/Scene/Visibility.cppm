@@ -8,10 +8,6 @@ import rstd.cppstd;
 export namespace sr
 {
 
-// Mirrors `sr::wpscene::VisibleUserBinding` (the schema-side type) but lives
-// in the scene model so render-runtime code can resolve visibility against
-// engine.userProperties without depending on `sr.pkg.scene_obj`. Populated by
-// the scene compiler via `ToSceneUserVisibilityBinding`.
 struct SceneUserVisibilityBinding {
     std::string    key;
     nlohmann::json condition;
@@ -20,8 +16,6 @@ struct SceneUserVisibilityBinding {
     bool empty() const { return key.empty(); }
 };
 
-// WE user-properties may be wrapped as `{"value": <scalar>}` or stored bare.
-// Returns the payload to compare against a binding's condition.
 inline const nlohmann::json& SceneUserPropertyPayload(const nlohmann::json& property) {
     if (property.is_object()) {
         auto it = property.find("value");
@@ -60,8 +54,6 @@ inline bool SceneJsonScalarEquals(const nlohmann::json& a, const nlohmann::json&
     return false;
 }
 
-// Resolves a binding against a single user-property payload. Returns nullopt
-// when the binding is empty or the payload cannot coerce to a bool.
 inline std::optional<bool>
 ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding,
                                   const nlohmann::json&             property) {
@@ -72,9 +64,6 @@ ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding,
     return std::nullopt;
 }
 
-// Resolves a binding against a (key, property) pair from the user-property
-// map. Returns nullopt when the binding's key does not match `key` or the
-// payload cannot coerce.
 inline std::optional<bool>
 ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding, std::string_view key,
                                   const nlohmann::json& property) {

@@ -169,6 +169,7 @@ target_sources(SceneRendererRenderer
          ../Gpu/Pipeline/VulkanFrameEngine.cppm
          ../Gpu/Pipeline/RenderPassBase.cppm
          ../Gpu/Pipeline/RenderResources.cppm
+         ../Gpu/Pipeline/ResourceKey.cppm
          ../Gpu/Pipeline/PipelineShared.cppm
          ../Gpu/Pipeline/BlitPass.cppm
          ../Gpu/Pipeline/MaterialPass.cppm

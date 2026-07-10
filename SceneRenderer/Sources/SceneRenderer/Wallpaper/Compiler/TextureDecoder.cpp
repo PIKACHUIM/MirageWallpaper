@@ -166,11 +166,11 @@ void SetHeaderPow2(ImageHeader& header, i32 mip_0_w, i32 mip_0_h) {
 }
 
 // --- external image path resolution ----------------------------------------
-// mpris-style media-art URLs arrive as `file://...` (or percent-encoded
-// absolute paths) rather than vfs keys. When `Parse`/`ParseHeader` see such
-// a name, we bypass the `.tex` container path entirely and load the file
-// straight through stb_image, synthesising an ImageHeader so the downstream
-// texture cache treats it like any other decoded Image.
+// Media-art URLs can arrive as `file://...` (or percent-encoded absolute
+// paths) rather than vfs keys. When `Parse`/`ParseHeader` see such a name,
+// we bypass the `.tex` container path entirely and load the file straight
+// through stb_image, synthesising an ImageHeader so the downstream texture
+// cache treats it like any other decoded Image.
 
 std::optional<uint8_t> HexValue(char c) {
     if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
@@ -260,7 +260,7 @@ std::shared_ptr<Image> ParseExternalImage(std::string_view key, const std::strin
 } // namespace
 
 std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
-    // mpris media-art URLs (`file://...` / absolute paths) bypass the .tex
+    // Media-art URLs (`file://...` / absolute paths) bypass the .tex
     // container and decode straight from the on-disk image file.
     if (auto path = ResolveExternalImagePath(name)) {
         return ParseExternalImage(name, *path);
@@ -394,7 +394,7 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
 
 ImageHeader TextureAssetDecoder::ParseHeader(const std::string& name) {
     ImageHeader header;
-    // External image (mpris art URL): probe via stbi_info so the validator
+    // External media-art image: probe via stbi_info so the validator
     // sees real dimensions without a full Parse().
     if (auto path = ResolveExternalImagePath(name)) {
         int width = 0, height = 0, channels = 0;

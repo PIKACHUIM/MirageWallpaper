@@ -71,7 +71,9 @@ struct ParseContext {
         std::function<void(const Eigen::Vector3f&)> apply_attachment_offset;
         std::vector<rstd::sync::Arc<SceneNode>>     ordered_before_nodes;
     };
-    std::unordered_map<std::int32_t, NodeRef> node_id_map;
+    std::unordered_map<std::int32_t, NodeRef>       node_id_map;
+    std::unordered_map<std::int32_t, std::uint32_t> object_parent_ids;
+    Set<std::int32_t>                               solid_layer_ids;
     // Scene.json declaration order. Reparenting in this order keeps each
     // container's children in the order they appeared in scene.json (so
     // layer 28 stays the first child of layer 79). Iterating the unordered
@@ -87,12 +89,12 @@ struct ParseContext {
     std::int32_t next_dynamic_layer_id { -100000 };
     struct CreateLayerAssetRequest {
         sr::script::FieldScript* script { nullptr };
-        std::int32_t             owner_id { 0 };
-        std::string              source;
+        std::int32_t              owner_id { 0 };
+        std::string               source;
     };
     std::vector<CreateLayerAssetRequest> create_layer_asset_requests;
 
-    std::unordered_map<std::int32_t, std::string> image_texture_fallbacks;
+    std::unordered_map<std::int32_t, std::string> system_media_image_fallbacks;
     Set<std::int32_t>                             hidden_link_source_ids;
     bool                                          scene_layer_text_writes { false };
 };

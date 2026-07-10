@@ -1,7 +1,7 @@
 #pragma once
 
-// Shared DSP bits between the PulseAudio and PipeWire backends of
-// wavsen::audio::AudioCapture. Pure CPU code; no backend headers.
+// Shared DSP bits for wavsen::audio::AudioCapture backends. Pure CPU code;
+// no backend headers.
 
 #include <algorithm>
 #include <array>

@@ -911,14 +911,14 @@ std::string ResolveMdlMaterialPath(std::string_view ref) {
 
 } // namespace
 
-bool ModelAssetCompiler::ParseHeader(std::string_view path, fs::VFS& vfs, WPMdlHeader& h) {
+bool WPMdlParser::ParseHeader(std::string_view path, fs::VFS& vfs, WPMdlHeader& h) {
     auto pfile = vfs.Open("/assets/" + std::string(path));
     if (! pfile) return false;
     auto f = fs::MemBinaryStream(*pfile);
     return ReadHeaderFromStream(f, h, path);
 }
 
-bool ModelAssetCompiler::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
+bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
     auto str_path = std::string(path);
     auto pfile    = vfs.Open("/assets/" + str_path);
     if (! pfile) return false;
@@ -1004,7 +1004,7 @@ bool ModelAssetCompiler::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) 
     return true;
 }
 
-std::optional<wpscene::Material> ModelAssetCompiler::ParseMaterial(std::string_view ref, fs::VFS& vfs) {
+std::optional<wpscene::Material> WPMdlParser::ParseMaterial(std::string_view ref, fs::VFS& vfs) {
     nlohmann::json json;
     const auto     path = ResolveMdlMaterialPath(ref);
     if (! sr::ParseJson(fs::GetFileContent(vfs, path), json)) {
@@ -1024,7 +1024,7 @@ std::optional<wpscene::Material> ModelAssetCompiler::ParseMaterial(std::string_v
     return material;
 }
 
-void ModelAssetCompiler::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
+void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
                                  std::array<float, 2> texcoord_scale,
                                  Eigen::Vector3f      position_offset) {
     const size_t vert_num = src.positions.size();
@@ -1137,7 +1137,7 @@ void ModelAssetCompiler::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl
     }
 }
 
-void ModelAssetCompiler::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
+void WPMdlParser::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
                                         std::span<const uint32_t> clip_part_indices,
                                         std::array<float, 2>      texcoord_scale,
                                         Eigen::Vector3f           position_offset) {
@@ -1153,13 +1153,13 @@ void ModelAssetCompiler::GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, cons
     submesh.draw_ranges = std::move(ranges);
 }
 
-void ModelAssetCompiler::AddPuppetShaderInfo(WPShaderInfo& info, const WPMdl& mdl) {
-    info.combos["SKINNING"]  = "1";
-    info.combos["BONECOUNT"] = std::to_string(mdl.puppet->bones.size());
+void WPMdlParser::AddPuppetShaderInfo(WPShaderInfo& info, const WPMdl& mdl) {
+    info.combos[std::string(WE_CB_SKINNING)]  = "1";
+    info.combos[std::string(WE_CB_BONECOUNT)] = std::to_string(mdl.puppet->bones.size());
 }
 
-void ModelAssetCompiler::AddPuppetMatInfo(wpscene::Material& mat, const WPMdl& mdl) {
-    mat.combos["SKINNING"]  = 1;
-    mat.combos["BONECOUNT"] = (i32)mdl.puppet->bones.size();
-    mat.use_puppet          = true;
+void WPMdlParser::AddPuppetMatInfo(wpscene::Material& mat, const WPMdl& mdl) {
+    mat.combos[std::string(WE_CB_SKINNING)]  = 1;
+    mat.combos[std::string(WE_CB_BONECOUNT)] = (i32)mdl.puppet->bones.size();
+    mat.use_puppet                           = true;
 }

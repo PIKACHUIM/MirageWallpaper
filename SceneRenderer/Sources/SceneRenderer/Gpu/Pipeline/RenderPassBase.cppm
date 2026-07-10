@@ -49,19 +49,13 @@ struct PassTextureRequestDiagnostic {
 
 class VulkanPass : public rg::Pass {
 public:
-    VulkanPass()                                                     = default;
-    virtual ~VulkanPass()                                            = default;
+    VulkanPass()                                                                      = default;
+    virtual ~VulkanPass()                                                             = default;
     virtual void                  prepare(Scene&, const Device&, RenderingResources&) = 0;
     virtual void                  execute(const Device&, RenderingResources&)         = 0;
     virtual void                  destory(const Device&, RenderingResources&)         = 0;
-    // TODO(4b41483): the diagnostic / cache-key virtuals below are wired with
-    // default no-op implementations so existing passes keep compiling. The
-    // upstream render loop drives pipeline/framebuffer cache reuse and texture
-    // request invalidation through them; the port's render loop still builds
-    // pipelines per-pass and does not yet call these.
     virtual PassInvalidationFlags finalizeResourceRequests(Scene&) { return PassInvalidationNone; }
     virtual std::optional<RenderItemId>        renderItemId() const { return std::nullopt; }
-    virtual std::size_t                        pipelineFingerprint() const { return 0; }
     virtual std::optional<PipelineCacheKey>    pipelineCacheKey() const { return std::nullopt; }
     virtual bool                               pipelineCacheHit() const { return false; }
     virtual uint64_t                           pipelineCacheObservedCount() const { return 0; }
@@ -74,9 +68,6 @@ public:
     virtual std::vector<PassTextureRequestDiagnostic> textureRequestDiagnostics() const {
         return {};
     }
-    // TODO(4b41483): refreshMaterialTextureBindings takes the upstream
-    // RenderSceneSnapshot; the placeholder snapshot (RenderResources.cppm)
-    // makes this compile but the body is a no-op until the snapshot lands.
     virtual MaterialTextureBindingRefresh
     refreshMaterialTextureBindings(const RenderSceneSnapshot&) {
         return {};

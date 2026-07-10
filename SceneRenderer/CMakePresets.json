@@ -17,7 +17,7 @@
     {
       "name": "macos-clang-release",
       "displayName": "macOS · Homebrew Clang · Release",
-      "description": "SceneRenderer engine plus the standalone SceneViewer tool.",
+      "description": "SceneRenderer engine plus standalone viewer and macOS wallpaper tools.",
       "inherits": "_clang-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":   "Release",

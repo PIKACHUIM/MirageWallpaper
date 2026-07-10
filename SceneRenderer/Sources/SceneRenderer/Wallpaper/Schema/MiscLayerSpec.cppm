@@ -64,18 +64,18 @@ struct TextObject {
     std::string        visible_user_key;
 
     // Visual/material overlap with image kind.
-    std::array<float, 3> color { 1.0f, 1.0f, 1.0f };
-    float                alpha { 1.0f };
-    float                brightness { 1.0f };
-    int32_t              colorBlendMode { 0 };
-    std::array<float, 2> size { 0.0f, 0.0f };
-    bool                 perspective { false };
-    bool                 copybackground { false };
-    bool                 solid { false };
-    bool                 opaquebackground { false };
-    bool                 ledsource { false };
-    std::array<float, 3> backgroundcolor { 0.0f, 0.0f, 0.0f };
-    float                backgroundbrightness { 1.0f };
+    std::array<float, 3>     color { 1.0f, 1.0f, 1.0f };
+    float                    alpha { 1.0f };
+    float                    brightness { 1.0f };
+    int32_t                  colorBlendMode { 0 };
+    std::array<float, 2>     size { 0.0f, 0.0f };
+    bool                     perspective { false };
+    bool                     copybackground { false };
+    bool                     solid { false };
+    bool                     opaquebackground { false };
+    bool                     ledsource { false };
+    std::array<float, 3>     backgroundcolor { 0.0f, 0.0f, 0.0f };
+    float                    backgroundbrightness { 1.0f };
     std::vector<ImageEffect> effects;
 
     bool FromJson(const nlohmann::json& json, fs::VFS& vfs) {

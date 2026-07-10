@@ -62,11 +62,7 @@ enum GSLogLevel: String, CaseIterable, Identifiable, Codable {
 
 enum GSSteamAPIEndpoint: String, CaseIterable, Identifiable, Codable {
     var id: Self { self }
-    /// 按时区自动：UTC+8 用镜像，其余用官方
-    case auto
-    /// https://api.steampowered.com/
     case official
-    /// https://steams.524228.xyz/
     case mirror
 }
 
@@ -121,7 +117,8 @@ struct GlobalSettings: Codable, Equatable {
     var autoRefresh = true
 
     // MARK: Steam Workshop
-    var steamAPIEndpoint = GSSteamAPIEndpoint.auto
+    var steamAPIEndpoint = GSSteamAPIEndpoint.official
+    var steamAPIKey = ""
 }
 
 class GlobalSettingsViewModel: ObservableObject {
@@ -146,6 +143,9 @@ class GlobalSettingsViewModel: ObservableObject {
             self.settings = settings
         } else {
             self.settings = GlobalSettings()
+        }
+        if TimeZone.current.secondsFromGMT() != 8 * 3600 {
+            self.settings.steamAPIEndpoint = .official
         }
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)

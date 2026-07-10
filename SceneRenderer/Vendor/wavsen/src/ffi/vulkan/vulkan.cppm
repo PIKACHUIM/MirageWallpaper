@@ -4,7 +4,7 @@ module;
 #include <cstdint>
 
 // Capture macros before #undef. Comprehensive Vulkan FFI module — covers
-// the symbol surface needed by both wavsen video plumbing and OWE's vvk
+// the symbol surface needed by wavsen video plumbing and the Vulkan
 // dispatch-table renderer. Macros that resist tokenisation are captured
 // in a hidden namespace, #undef'd, and re-exported as constexpr alternates.
 namespace _wv_vk {

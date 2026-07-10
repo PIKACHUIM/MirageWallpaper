@@ -6,8 +6,6 @@ import rstd.cppstd;
 import sr.vulkan;
 import sr.scene;
 
-import :resource;
-
 export namespace sr::vulkan
 {
 

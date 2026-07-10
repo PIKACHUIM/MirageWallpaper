@@ -389,16 +389,9 @@ bool sr::vulkan::CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> compU
             return false;
         }
 
-        const char* dump_spirv = std::getenv("SCENERENDERER_DUMP_SPIRV");
-        if (dump_spirv == nullptr || dump_spirv[0] == '\0') {
-            dump_spirv = std::getenv("SCENERENDERER_DUMP_SPIRV");
-        }
-        if (dump_spirv != nullptr && dump_spirv[0] != '\0' && dump_spirv[0] != '0') {
-            static int            dump_idx = 0;
-            std::filesystem::path base_path =
-                std::filesystem::temp_directory_path() /
-                ("SceneRenderer_spirv_" + std::to_string(dump_idx++) + "_" + entry_str);
-            std::string base     = base_path.native();
+        if (std::getenv("SCENERENDERER_DUMP_SPIRV")) {
+            static int  dump_idx = 0;
+            std::string base     = "/tmp/sr_dump_" + std::to_string(dump_idx++) + "_" + entry_str;
             std::string spv_path = base + ".spv";
             std::string src_path = base + ".glsl";
             if (auto* f = std::fopen(spv_path.c_str(), "wb")) {

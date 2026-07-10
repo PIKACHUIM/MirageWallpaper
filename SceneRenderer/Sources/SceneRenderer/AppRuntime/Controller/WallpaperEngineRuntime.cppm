@@ -6,6 +6,7 @@ import sr.core;
 import rstd.cppstd;
 import nlohmann.json;
 
+export import sr.scene;
 export import sr.vulkan_render;
 export import sr.vulkan;
 export import sr.types;
@@ -15,19 +16,17 @@ export namespace sr
 {
 
 using FirstFrameCallback = std::function<void()>;
+using UserPropertyDiagnosticCallback =
+    std::function<void(std::vector<SceneUserPropertyDiagnostic>)>;
+using RenderPassDiagnosticCallback =
+    std::function<void(std::vector<vulkan::PreparedPassDiagnostic>)>;
 
 // Fired once per loaded scene with the parsed `general.clearcolor` so the
-// host can keep letterbox bars aligned with the scene background.
-// Components are 0..=1 sRGB. Alpha is fixed at 1.0 by the host because
-// the rendered frame is always opaque.
+// host can keep letterbox bars aligned with the scene's intended background.
+// Components are 0..=1 sRGB. Alpha is fixed at 1.0 by the host because the
+// rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
 
-// Host media playback snapshot, pushed in via SceneWallpaper::setMediaStatus.
-// `state` matches the WE `MediaPlaybackEvent` JS enum (0=stopped, 1=playing,
-// 2=paused). The runtime forwards this to the script runtime as a media
-// event and (where the renderer supports it) refreshes `$mediaThumbnail` /
-// `$mediaPreviousThumbnail` material texture bindings from `art_url` /
-// `previous_art_url`.
 struct MediaStatus {
     uint32_t    state { 0 };
     std::string title;
@@ -86,6 +85,8 @@ public:
     void setUserPropertyRaw(std::string_view, std::string);
     void setUserPropertyJson(std::string_view, nlohmann::json);
     void setOnFirstFrame(FirstFrameCallback);
+    void setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback);
+    void requestPreparedPassDiagnostics(RenderPassDiagnosticCallback);
 
     // Install (or clear, with `nullptr`) a callback invoked on the
     // main thread after each scene is parsed, carrying the scene's

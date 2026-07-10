@@ -28,8 +28,8 @@ private:
     std::mutex              m_cond_mutex;
     std::condition_variable m_condition;
 
-    std::atomic<std::chrono::microseconds> m_interval {};
-    std::atomic<bool>                      m_running { false };
+    std::atomic<std::chrono::microseconds> m_interval;
+    std::atomic<bool>                      m_running;
 };
 
 } // namespace sr

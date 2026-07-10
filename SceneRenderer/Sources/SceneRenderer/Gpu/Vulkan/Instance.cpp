@@ -194,8 +194,7 @@ bool Instance::Create(Instance& inst, std::span<const Extension> instExts,
     std::vector<std::string_view> exts_vec { exts.begin(), exts.end() },
         layers_vec { layers.begin(), layers.end() };
 
-    VVK_CHECK_BOOL_RE(
-        CreatInstance(&inst.m_vinst, exts_vec, layers_vec, inst.m_dld, api_version));
+    VVK_CHECK_BOOL_RE(CreatInstance(&inst.m_vinst, exts_vec, layers_vec, inst.m_dld, api_version));
     vvk::Load(*inst.m_vinst, inst.m_dld);
     inst.m_api_version = api_version;
     inst.m_enabled_extensions.assign(exts.begin(), exts.end());

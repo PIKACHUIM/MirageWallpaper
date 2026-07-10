@@ -10,9 +10,16 @@ struct GeneralPage: SettingsPage {
     @ObservedObject var viewModel: GlobalSettingsViewModel
 
     @State private var pathRefresh = 0
+    @State private var showMirrorWarning = false
 
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
+    }
+
+    private func applyEndpointChange() {
+        AppDelegate.shared.workshopViewModel.items = []
+        AppDelegate.shared.workshopViewModel.currentPage = 1
+        AppDelegate.shared.workshopViewModel.search()
     }
 
     private func chooseDirectory(message: String, completion: @escaping (URL) -> Void) {
@@ -125,19 +132,44 @@ struct GeneralPage: SettingsPage {
             }
             .id(pathRefresh)
 
-            Section {
-                Picker("Steam API 线路", selection: $viewModel.settings.steamAPIEndpoint) {
-                    Text("自动（按时区）").tag(GSSteamAPIEndpoint.auto)
-                    Text("官方 (api.steampowered.com)").tag(GSSteamAPIEndpoint.official)
-                    Text("镜像 (steams.524228.xyz)").tag(GSSteamAPIEndpoint.mirror)
+            if TimeZone.current.secondsFromGMT() == 8 * 3600 {
+                Section {
+                    Picker("Steam API 线路", selection: $viewModel.settings.steamAPIEndpoint) {
+                        Text("SteamWebAPI").tag(GSSteamAPIEndpoint.official)
+                        Text("SteamCF 镜像").tag(GSSteamAPIEndpoint.mirror)
+                    }
+                    .onChange(of: viewModel.settings.steamAPIEndpoint) { _, newValue in
+                        if newValue == .mirror {
+                            showMirrorWarning = true
+                        } else {
+                            applyEndpointChange()
+                        }
+                    }
+                } header: {
+                    Label("创意工坊", systemImage: "network")
                 }
-                .onChange(of: viewModel.settings.steamAPIEndpoint) { _, _ in
-                    AppDelegate.shared.workshopViewModel.items = []
-                    AppDelegate.shared.workshopViewModel.currentPage = 1
-                    AppDelegate.shared.workshopViewModel.search()
+                .alert("SteamCF 镜像警告", isPresented: $showMirrorWarning) {
+                    Button("仍要使用") {
+                        applyEndpointChange()
+                    }
+                    Button("取消", role: .cancel) {
+                        viewModel.settings.steamAPIEndpoint = .official
+                    }
+                } message: {
+                    Text("这是镜像 API，非官方，不保证安全性和可用性。镜像 API 不镜像下载，只能加速 API 回应而不能加速下载。")
+                }
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Steam Web API Key", text: $viewModel.settings.steamAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                    Text("可前往 [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) 申请。填写域名时随意编写即可，不要使用已被注册的大型域名（如 baidu.com）。留空则使用内置 Key。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
-                Label("创意工坊", systemImage: "network")
+                Label("Steam API Key", systemImage: "key.fill")
             }
 
             Section {

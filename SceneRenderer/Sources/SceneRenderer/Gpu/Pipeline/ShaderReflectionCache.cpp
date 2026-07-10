@@ -7,26 +7,11 @@ import rstd.cppstd;
 import sr.vulkan;
 import sr.scene;
 
-import :shader_reflection_cache;
-
 namespace sr::vulkan
 {
 
 namespace
 {
-
-// TODO(4b41483): upstream factors SceneShaderCodeHash into the scene module.
-// The port does not yet carry it, so a local equivalent is used: a stable
-// hash over every SPIR-V word of every code blob on the SceneShader.
-std::size_t SceneShaderCodeHash(const SceneShader& shader) {
-    std::size_t seed { 0 };
-    utils::hash_combine(seed, shader.codes.size());
-    for (const auto& code : shader.codes) {
-        utils::hash_combine(seed, code.size());
-        for (auto word : code) utils::hash_combine(seed, static_cast<uint64_t>(word));
-    }
-    return seed;
-}
 
 ShaderReflectionKey MakeShaderReflectionKey(const SceneShader& shader) {
     return ShaderReflectionKey {

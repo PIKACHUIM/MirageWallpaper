@@ -2,6 +2,7 @@ module;
 
 #include <rstd/macro.hpp>
 #include <algorithm>
+#include <cmath>
 #include "quickjs.h"
 
 module sr.script;
@@ -87,7 +88,7 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-       if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0 || ! IsFinite(d)) return false;
         out = d;
         return true;
     };
@@ -100,7 +101,7 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-       if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0 || ! IsFinite(d)) return false;
         out = d;
         return true;
     };
@@ -180,7 +181,6 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     }
     return {};
 }
-
 
 JSValue ScriptValueToJs(JSContext* ctx, const ScriptValue& value) {
     if (auto* p = std::get_if<ScalarValue>(&value)) return JS_NewFloat64(ctx, p->v);
@@ -286,7 +286,8 @@ JSValue CoerceInitialValue(JSContext* ctx, const json& v, FieldKind kind) {
         break;
     }
     case FieldKind::Vec3: {
-@@ -271,13 +291,13 @@ JSValue CoerceInitialValue(JSContext* ctx, const json& v, FieldKind kind) {
+        if (v.is_string()) {
+            auto   fs = parse_floats(v.get_ref<const std::string&>());
             double x  = fs.size() > 0 ? fs[0] : 0.0;
             double y  = fs.size() > 1 ? fs[1] : x; // splat single scalar
             double z  = fs.size() > 2 ? fs[2] : (fs.size() > 1 ? 0.0 : x);
@@ -339,11 +340,9 @@ struct DeferredCb {
 
 struct EngineHostState {
     FrameInputs inputs;
-    // Most recent media snapshot pushed via JsRuntime::SetMediaStatus, plus
-    // an "ever-seen" flag so the first push always fires all three callbacks
-    // (edge-detect treats `first` as a change against nothing).
     MediaStatus media;
     bool        media_initialized { false };
+    sr::Scene* scene { nullptr };
     JSValue     audio_buffer { JS_UNDEFINED };
     uint32_t    audio_buffer_resolution { 64 };
     bool        audio_buffer_built { false };
@@ -432,7 +431,6 @@ struct FieldScript::Impl {
     // Per-script cursor-inside-bbox state used to edge-detect
     // cursorEnter / cursorLeave between frames.
     bool cursor_inside { false };
-    bool has_cursor_callbacks { false };
     // Pre-spawned SceneNode clones available to thisScene.createLayer.
     // Populated by WireFieldScripts for audio-bar style scripts; popped
     // from the front each createLayer call.
@@ -905,8 +903,7 @@ JSValue MakeCursorEvent(JSContext* ctx, const CursorWorld& c, int button) {
 
 // Invoke `name` on the script's module namespace if exported, passing one
 // event arg. `thisLayer` should already be bound to the script's node by
-// the caller. Exceptions are caught and logged once per sha. Used for both
-// cursor events and media events.
+// the caller. Exceptions are caught and logged once per sha.
 void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue ev,
                          JsRuntime::Impl* rt, std::string_view sha) {
     JSValue fn = JS_GetPropertyStr(ctx, ns, name);
@@ -1271,6 +1268,7 @@ function __wwCreateNodeStub() {
             if (key === 'getChildren')         return () => [];
             if (key === 'getName')             return () => '';
             if (key === 'getLayer')            return (_n) => __wwCreateNodeStub();
+            if (key === 'getEffect')           return (_n) => __wwCreateEffectStub();
             if (key === 'getTextureAnimation') return () => __wwCreateTexAnimStub();
             if (key === 'getVideoTexture')     return () => __wwCreateVideoTextureStub();
             if (key === 'getAnimation')        return ()   => __wwCreateAnimationStub();
@@ -1283,6 +1281,10 @@ function __wwCreateNodeStub() {
         has(target, key) { return key in target; },
     };
     return new Proxy(props, handler);
+}
+
+function __wwCreateEffectStub() {
+    return { visible: true };
 }
 
 function __wwCreateTexAnimStub() {
@@ -1332,10 +1334,8 @@ function __wwCreateAnimationStub() {
     return o;
 }
 globalThis.__wwCreateAnimationStub = __wwCreateAnimationStub;
+globalThis.__wwCreateVideoTextureStub = __wwCreateVideoTextureStub;
 globalThis.thisLayer = __wwCreateNodeStub();
-// WE alias: `thisObject` mirrors `thisLayer` so media-event callbacks (and
-// any script code) can reference the bound node under either name. Swapped
-// in lockstep with `thisLayer` by `__wwBindLayer` / BindThisLayer below.
 globalThis.thisObject = globalThis.thisLayer;
 globalThis.thisScene = __wwCreateNodeStub();
 
@@ -1566,7 +1566,8 @@ JSModuleDef* BuiltinModuleLoader(JSContext* ctx, const char* module_name, void*)
 // the SceneNode pointer in JS_GetOpaque; lifetime is owned by Scene, the
 // finalizer is a no-op (we don't dereference on free, just drop the ref).
 
-static JSClassID s_layer_class_id = 0;
+static JSClassID s_layer_class_id  = 0;
+static JSClassID s_effect_class_id = 0;
 
 struct LayerHandle {
     EngineHostState* host { nullptr };
@@ -1590,6 +1591,21 @@ JSClassDef s_layer_class_def {
     .finalizer  = LayerFinalizer,
 };
 
+struct EffectHandle {
+    EngineHostState*                        host { nullptr };
+    std::optional<sr::SceneImageEffectRef> ref;
+    bool                                    fallback_visible { true };
+};
+
+void EffectFinalizer(JSRuntime*, JSValue v) {
+    delete static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
+}
+
+JSClassDef s_effect_class_def {
+    .class_name = "WWEffect",
+    .finalizer  = EffectFinalizer,
+};
+
 inline sr::SceneNode* GetLayerNode(JSValueConst v) {
     return ResolveLayerNode(static_cast<LayerHandle*>(JS_GetOpaque(v, s_layer_class_id)));
 }
@@ -1608,6 +1624,38 @@ JSValue WrapLayerName(JSContext* ctx, std::string name) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetOpaque(obj, new LayerHandle { .host = host, .node = nullptr, .name = std::move(name) });
     return obj;
+}
+
+EffectHandle* GetEffectHandle(JSValueConst v) {
+    return static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
+}
+
+JSValue WrapEffect(JSContext* ctx, std::optional<sr::SceneImageEffectRef> ref) {
+    JSValue obj = JS_NewObjectClass(ctx, s_effect_class_id);
+    if (JS_IsException(obj)) return obj;
+    auto* host    = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    bool  visible = ref && ref->effect ? ref->effect->runtime_visible : true;
+    JS_SetOpaque(
+        obj, new EffectHandle { .host = host, .ref = std::move(ref), .fallback_visible = visible });
+    return obj;
+}
+
+JSValue EffectGetVisible(JSContext* ctx, JSValueConst this_val) {
+    auto* h = GetEffectHandle(this_val);
+    if (! h) return JS_NewBool(ctx, true);
+    if (h->ref && h->ref->effect) return JS_NewBool(ctx, h->ref->effect->runtime_visible);
+    return JS_NewBool(ctx, h->fallback_visible);
+}
+
+JSValue EffectSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* h       = GetEffectHandle(this_val);
+    bool  visible = JS_ToBool(ctx, val) != 0;
+    if (! h) return JS_UNDEFINED;
+    h->fallback_visible = visible;
+    if (h->host && h->host->scene && h->ref) {
+        h->host->scene->SetImageEffectRuntimeVisible(*h->ref, visible);
+    }
+    return JS_UNDEFINED;
 }
 
 inline JSValue MakeVec3(JSContext* ctx, double x, double y, double z) {
@@ -1943,6 +1991,18 @@ JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     return hit ? WrapLayerNode(ctx, hit) : WrapLayerName(ctx, std::move(layer_name));
 }
 
+JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* n    = GetLayerNode(this_val);
+    if (! host || ! host->scene || ! n || argc < 1) return WrapEffect(ctx, std::nullopt);
+
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (! name) return WrapEffect(ctx, std::nullopt);
+    auto effect = host->scene->FindNodeImageEffect(*n, name);
+    JS_FreeCString(ctx, name);
+    return WrapEffect(ctx, std::move(effect));
+}
+
 bool TreeContains(sr::SceneNode* root, sr::SceneNode* needle) {
     if (! root || ! needle) return false;
     if (root == needle) return true;
@@ -1992,10 +2052,11 @@ JSValue NodeSceneGetInitialLayerConfig(JSContext* ctx, JSValueConst, int, JSValu
     return JS_NewObject(ctx);
 }
 
-// thisScene.createLayer(model_path) — WE-style runtime layer spawn. The parser
-// pre-spawns matching SceneNode clones for supported dynamic layer patterns.
-// Prefer an asset-specific queue when the script passes a model/image path,
-// then fall back to the legacy audio-bar queue.
+// thisScene.createLayer(model_path) — WE-style runtime layer spawn. The
+// model path is ignored: parser-side pre-spawned a queue of SceneNode clones
+// (one per expected createLayer call) when the script binding showed the
+// audio-bar pattern. Pop the next clone here; fall back to the default
+// stub when no clones remain so the script's caller still gets an object.
 JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc,
                              JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2201,6 +2262,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getChildren", 0, NodeGetChildren),
     JS_CFUNC_DEF("getName", 0, NodeGetName),
     JS_CFUNC_DEF("getLayer", 1, NodeGetLayer),
+    JS_CFUNC_DEF("getEffect", 1, NodeGetEffect),
     JS_CFUNC_DEF("enumerateLayers", 0, NodeSceneEnumerateLayers),
     JS_CFUNC_DEF("getInitialLayerConfig", 1, NodeSceneGetInitialLayerConfig),
     JS_CFUNC_DEF("getBoneIndex", 1, NodeGetBoneIndex),
@@ -2230,6 +2292,21 @@ void InitLayerClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_layer_class_id, proto);
 }
 
+const JSCFunctionListEntry s_effect_proto_funcs[] = {
+    JS_CGETSET_DEF("visible", EffectGetVisible, EffectSetVisible),
+};
+
+void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_effect_class_id == 0) JS_NewClassID(rt, &s_effect_class_id);
+    JS_NewClass(rt, s_effect_class_id, &s_effect_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_effect_proto_funcs,
+                               sizeof(s_effect_proto_funcs) / sizeof(s_effect_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_effect_class_id, proto);
+}
+
 // Stash the bootstrap's `thisLayer` / `thisScene` stubs for restore.
 void CaptureDefaultBindings(JSContext* ctx) {
     auto*   host        = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -2240,8 +2317,7 @@ void CaptureDefaultBindings(JSContext* ctx) {
 }
 
 // Write `globalThis.thisLayer = val`. `val` is duplicated; ownership of
-// the original ref stays with the caller. `thisObject` is kept in sync as
-// a WE-compatible alias of `thisLayer`.
+// the original ref stays with the caller.
 void BindThisLayer(JSContext* ctx, JSValueConst val) {
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, val));
@@ -2253,15 +2329,6 @@ void BindThisScene(JSContext* ctx, JSValueConst val) {
     JS_SetPropertyStr(ctx, g, "thisScene", JS_DupValue(ctx, val));
     JS_FreeValue(ctx, g);
 }
-
-// --- media-event payload builders ------------------------------------------
-// Each WE media callback receives a differently-shaped event object:
-//   mediaPlaybackChanged   → { state: MediaPlaybackEvent }
-//   mediaPropertiesChanged → { title, artist, album, albumArtist }
-//   mediaThumbnailChanged  → { hasThumbnail, thumbnail, artUrl,
-//                              previousThumbnail, primaryColor, secondaryColor }
-// `primaryColor`/`secondaryColor` are placeholder white/black until a real
-// colour-extraction pass exists; scripts only read them as Vec3.
 
 JSValue MakeMediaPlaybackEvent(JSContext* ctx, const MediaStatus& status) {
     JSValue ev = JS_NewObject(ctx);
@@ -2346,6 +2413,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     JS_SetModuleLoaderFunc(
         m_impl->rt, /*normalize=*/nullptr, BuiltinModuleLoader, /*opaque=*/nullptr);
     InitLayerClass(m_impl->ctx, m_impl->rt);
+    InitEffectClass(m_impl->ctx, m_impl->rt);
     InitTexAnimClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
@@ -2447,9 +2515,6 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
     host.media             = status;
     host.media_initialized = true;
 
-    // Edge-detect per channel so an unchanged snapshot is a no-op (scripts
-    // otherwise re-run their media handlers every push). `first` forces all
-    // three so initial state reaches scripts even when fields are default.
     const bool playback_changed   = first || prev.state != status.state;
     const bool properties_changed = first || prev.title != status.title ||
                                     prev.artist != status.artist || prev.album != status.album ||
@@ -2502,6 +2567,11 @@ namespace
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs);
 }
 
+void JsRuntime::SetScene(sr::Scene* scene) {
+    if (! m_impl) return;
+    m_impl->host.scene = scene;
+}
+
 void JsRuntime::SetSceneRoot(sr::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
@@ -2535,18 +2605,18 @@ void JsRuntime::TickAll() {
     };
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
-        if (! I->alive || ! I->node || ! I->has_cursor_callbacks) continue;
+        if (! I->alive || ! I->node) continue;
         const bool now_inside = in_window && HitTestNode(I->node, cursor);
         BindThisLayer(
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
         if (now_inside != I->cursor_inside) {
             InvokeEventCallback(ctx,
-                                 I->module_ns,
-                                 now_inside ? "cursorEnter" : "cursorLeave",
-                                 ensure_ev(-1),
-                                 m_impl.get(),
-                                 I->sha);
+                                I->module_ns,
+                                now_inside ? "cursorEnter" : "cursorLeave",
+                                ensure_ev(-1),
+                                m_impl.get(),
+                                I->sha);
             I->cursor_inside = now_inside;
         }
         if (now_inside) {
@@ -2604,7 +2674,6 @@ void JsRuntime::TickAll() {
             JS_FreeValue(ctx, I->current_value);
             I->current_value = next_value;
         }
-
         JS_FreeValue(ctx, ret);
     }
     m_impl->host.active_field_script = nullptr;
@@ -2647,13 +2716,6 @@ bool FunctionTakesArg(JSContext* ctx, JSValue fn) {
     JS_ToInt32(ctx, &n, len);
     JS_FreeValue(ctx, len);
     return n >= 1;
-}
-
-bool HasModuleFunction(JSContext* ctx, JSValue ns, const char* name) {
-    JSValue fn = JS_GetPropertyStr(ctx, ns, name);
-    bool    ok = JS_IsFunction(ctx, fn);
-    JS_FreeValue(ctx, fn);
-    return ok;
 }
 
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
@@ -2780,10 +2842,6 @@ FieldScript* JsRuntime::MakeFieldScript(
     // updates so the first frame's `update(value)` sees a Vec3, not a
     // raw string.
     I->current_value = init_arg;
-    I->has_cursor_callbacks =
-        HasModuleFunction(ctx, ns, "cursorEnter") || HasModuleFunction(ctx, ns, "cursorLeave") ||
-        HasModuleFunction(ctx, ns, "cursorMove") || HasModuleFunction(ctx, ns, "cursorDown") ||
-        HasModuleFunction(ctx, ns, "cursorUp") || HasModuleFunction(ctx, ns, "cursorClick");
 
     auto* raw = fs.get();
     m_impl->scripts.push_back(std::move(fs));
@@ -2923,9 +2981,6 @@ void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const nlohmann
     if (auto* ss = static_cast<ScriptScene*>(scene.script_scene.get()); ss != nullptr) {
         ss->runtime().SetUserProperty(key, property);
     }
-    // WE field-binding fanout: lights whose `visible` field is tied to
-    // `engine.userProperties[key]` flip runtime visibility here. Scene-only
-    // (no JS) wallpapers also need this, so it runs unconditionally.
     scene.ApplyUserLightVisibilityBindings(key, property);
 }
 

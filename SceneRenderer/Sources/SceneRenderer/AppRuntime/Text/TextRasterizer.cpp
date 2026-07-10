@@ -28,6 +28,37 @@ constexpr std::uint32_t kMinAtlasDim { 1024 };
 // atlas overflows.
 constexpr std::uint32_t kWhiteCellSize { 4 };
 
+// True for Unicode whitespace/format codepoints that carry layout advance but
+// no visible ink (regular space, NBSP, the fixed-width spaces, narrow/zero-
+// width no-break spaces, etc.). These must NOT be routed through the
+// fontconfig glyph fallback: a fallback face resolves e.g. U+202F to its own
+// narrow-space advance, collapsing the spacing the primary font (and the
+// scene's clock/date scripts) were laid out against. Keeping them on the
+// primary face preserves that font's advance for the codepoint.
+bool IsLayoutWhitespace(std::uint32_t cp) {
+    switch (cp) {
+    case 0x0020: // space
+    case 0x00A0: // no-break space
+    case 0x2000: // en quad
+    case 0x2001: // em quad
+    case 0x2002: // en space
+    case 0x2003: // em space
+    case 0x2004: // three-per-em space
+    case 0x2005: // four-per-em space
+    case 0x2006: // six-per-em space
+    case 0x2007: // figure space
+    case 0x2008: // punctuation space
+    case 0x2009: // thin space
+    case 0x200A: // hair space
+    case 0x202F: // narrow no-break space
+    case 0x205F: // medium mathematical space
+    case 0x3000: // ideographic space
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::uint32_t AtlasDimForPixelSize(std::uint32_t pixel_size) {
     if (pixel_size > 512) return 4096;
     if (pixel_size > 256) return 2048;
@@ -308,15 +339,23 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
     for (std::uint32_t codepoint : codepoints) {
         if (impl.glyphs.find(codepoint) != impl.glyphs.end()) continue;
 
-
         FT_Face render_face = impl.face;
         FT_UInt glyph_index = FT_Get_Char_Index(render_face, codepoint);
-        if (glyph_index == 0) {
+        if (glyph_index == 0 && ! IsLayoutWhitespace(codepoint)) {
             render_face = impl.ResolveFallbackFace(codepoint);
             glyph_index = render_face != nullptr ? FT_Get_Char_Index(render_face, codepoint) : 0;
         }
         if (glyph_index == 0) {
-            impl.glyphs.emplace(codepoint, GlyphInfo {});
+            // No renderable glyph (whitespace the primary face lacks, or a
+            // codepoint no fallback face covers). Reserve the primary face's
+            // .notdef (glyph 0) advance so the codepoint still occupies layout
+            // width — matching the pre-fallback port behavior — but never
+            // rasterize a tofu box for it.
+            GlyphInfo gi {};
+            if (FT_Load_Glyph(impl.face, 0, FT_LOAD_DEFAULT) == 0) {
+                gi.advance_x = static_cast<float>(impl.face->glyph->advance.x) / 64.0f;
+            }
+            impl.glyphs.emplace(codepoint, gi);
             continue;
         }
 
@@ -724,9 +763,9 @@ std::shared_ptr<sr::SceneShader> GetTextSceneShader() {
     return shader;
 }
 
-std::shared_ptr<owe::SceneShader> GetTextCopyBackgroundSceneShader() {
+std::shared_ptr<sr::SceneShader> GetTextCopyBackgroundSceneShader() {
     static std::once_flag                    once;
-    static std::shared_ptr<owe::SceneShader> shader;
+    static std::shared_ptr<sr::SceneShader> shader;
     std::call_once(once, [] {
         shader = CompileInlineShader("text_copybackground", kTextCopyBackgroundShaderHlsl);
     });
@@ -1005,9 +1044,9 @@ void TextLayouter::SetText(std::string_view utf8) {
     }
 
     std::array<float, 4> text_rgba {
-        im.style.color[0] * im.style.brightness,
-        im.style.color[1] * im.style.brightness,
-        im.style.color[2] * im.style.brightness,
+        im.style.color[0],
+        im.style.color[1],
+        im.style.color[2],
         im.style.alpha,
     };
 

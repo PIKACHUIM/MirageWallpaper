@@ -1,10 +1,10 @@
 #version 450
 
-// NV12 → RGBA8 conversion compute shader for the waywallen video plugin.
+// NV12 → RGBA8 conversion compute shader for SceneRenderer video textures.
 //
 // The YUV→RGB matrix and offset are pushed per-frame so the same
 // pipeline handles BT.601 / BT.709 / BT.2020 and limited / full range.
-// CPU side (libs/ffmpeg/src/yuv_to_rgba.cpp) picks the right values
+// CPU side (wavsen/src/video/yuv_to_rgba.cpp) picks the right values
 // from AVFrame::colorspace + AVFrame::color_range.
 //
 // Convention: ycbcr = vec3(Y, Cb, Cr) sampled in [0..1]; we add `offset`

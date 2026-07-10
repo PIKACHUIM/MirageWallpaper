@@ -55,8 +55,6 @@ public:
 
     void setNode(SceneNode* node) { m_node = node; }
 
-    // WE field-binding: `visible: {user: "key", value: <bool>}` ties this light's
-    // runtime visibility to engine.userProperties[<key>]. Empty key = unbound.
     const std::string& visibleUserKey() const { return m_visible_user_binding.key; }
     void               setVisibleUserKey(std::string k) {
         m_visible_user_binding = SceneUserVisibilityBinding { .key = std::move(k) };

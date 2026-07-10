@@ -80,7 +80,7 @@ Eigen::Vector3d GenSphereIn(TFUNC&& random) noexcept {
 }
 
 constexpr double DragForce(double speed, double strength, double density) {
-    return -2.0 * speed * strength * density;
+    return -speed * strength * density;
 }
 inline Eigen::Vector3d DragForce(Eigen::Vector3d v, double strength,
                                  double density = 1.0) noexcept {
@@ -113,19 +113,20 @@ inline Eigen::Vector3d CurlNoise(Eigen::Vector3d p) noexcept {
 
 namespace platform
 {
+// Was Utils/Platform.hpp.
 inline std::filesystem::path GetCachePath(std::string_view name) {
     using namespace std::filesystem;
 
+    path             p_cache;
     std::string_view home = sview_nullsafe(std::getenv("HOME"));
     if (! home.empty()) {
-#ifdef __APPLE__
-        return path(home) / "Library" / "Caches" / name;
-#else
         std::string_view cache = sview_nullsafe(std::getenv("XDG_CACHE_HOME"));
-        return (cache.empty() ? path(home) / ".cache" : path(cache)) / name;
-#endif
+        if (cache.empty())
+            p_cache = path(home) / ".cache";
+        else
+            p_cache = path(cache);
     }
-    return temp_directory_path() / name;
+    return p_cache / name;
 }
 } // namespace platform
 
