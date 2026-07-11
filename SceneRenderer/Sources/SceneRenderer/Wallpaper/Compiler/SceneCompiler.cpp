@@ -3957,8 +3957,6 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                 else
                     rstd_error("effect '{}' failed to load", wpeffobj.name);
             }
-        }
-
             auto resolve_node = rstd::sync::Arc<SceneNode>::make();
             auto resolved     = load_passthrough_material(resolve_node.as_ptr(), ppong_a);
             if (! resolved.has_value()) return;
@@ -4134,13 +4132,6 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             return *current_point_size;
         },
         set_pointsize);
-    context.script_scene->runtime().RegisterTextAlignSetters(compose_node.as_ptr(),
-                                                             anchor_state->horizontal,
-                                                             anchor_state->vertical,
-                                                             obj.pointsize,
-                                                             set_halign,
-                                                             set_valign);
-
     // Transform-style script bindings (origin/scale/angles) animate the
     // composite quad in world space, not the layer-space glyph node.
     AssignNodeFieldAnimations(*compose_node.as_ptr(), obj.field_bindings);

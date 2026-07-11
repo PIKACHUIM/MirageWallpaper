@@ -71,9 +71,9 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
                                 .first;
             cmd.src       = state_it->second.src;
             cmd.dst       = state_it->second.dst;
-            if (sstart_with(cmd.src, OWE_EFFECT_PPONG_PREFIX_A)) cmd.src = ppong_a;
+            if (sstart_with(cmd.src, SR_EFFECT_PPONG_PREFIX_A)) cmd.src = ppong_a;
 
-            if (sstart_with(cmd.dst, OWE_EFFECT_PPONG_PREFIX_A)) cmd.dst = ppong_a;
+            if (sstart_with(cmd.dst, SR_EFFECT_PPONG_PREFIX_A)) cmd.dst = ppong_a;
         }
         for (auto it = eff.nodes.begin(); it != eff.nodes.end(); it++) {
             rstd_assert(it->sceneNode->HasMaterial());
@@ -83,7 +83,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
             auto& state = state_it->second;
             if (inserted) {
                 for (usize i = 0; i < material.textures.size(); ++i) {
-                    if (sstart_with(material.textures[i], OWE_EFFECT_PPONG_PREFIX_A))
+                    if (sstart_with(material.textures[i], SR_EFFECT_PPONG_PREFIX_A))
                         state.pingpong_input_slots.push_back(i);
                 }
             }
@@ -104,6 +104,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
                 it->sceneNode->CopyTrans(default_node);
                 it->sceneNode->Mesh()->ChangeMeshDataFrom(default_mesh);
             }
+        }
         m_resolved_effects.push_back(&eff);
         swap_pp();
     };
