@@ -2073,8 +2073,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         }
     }
 
-    const bool has_author_effect       = CountVisibleImageEffects(wpimgobj.effects) > 0;
-    const bool layer_material_is_final = ! has_author_effect || has_bones;
+    const bool has_author_effect = CountVisibleImageEffects(wpimgobj.effects) > 0;
+    // A solid layer's flat material only produces its source color; a final compositor owns
+    // BLENDMODE and the previous-framebuffer input.
+    const bool layer_material_is_final =
+        (! has_author_effect || has_bones) && ! wpimgobj.solid_layer;
     const bool color_blend_uses_layer_material =
         wpimgobj.colorBlendMode != 0 && layer_material_is_final;
     const bool append_color_blend_final_effect =
@@ -3951,7 +3954,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             });
             layer->SetFinalResolveEffect(std::move(resolve_effect));
         }
-        
+
         auto compose_mesh = std::make_shared<SceneMesh>(/*dynamic=*/wants_dynamic_text);
         GenCardMesh(*compose_mesh,
                     { static_cast<float>(runtime_targets->layer_w),
