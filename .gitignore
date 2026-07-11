@@ -30,3 +30,4 @@ build-*
 .codex
 SteamWebAPI.swift
 xcuserdata
+.reasonix
