@@ -940,16 +940,21 @@ bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
     node.SetVisible(visible);
     if (id < 0) return false;
 
+    bool changed = false;
     if (! visible) {
         MarkLayerVisibilityElidable(WallpaperLayerId { .value = id });
         const bool is_elidable = elidable_layer_ids.count(id) != 0;
-        return was_elidable != is_elidable;
+        changed = was_elidable != is_elidable;
+    } else if (visibility_elidable_layer_ids.erase(id) != 0) {
+        RebuildElidableLayerIds();
+        const bool is_elidable = elidable_layer_ids.count(id) != 0;
+        changed = was_elidable != is_elidable;
     }
-
-    if (visibility_elidable_layer_ids.erase(id) == 0) return false;
-    RebuildElidableLayerIds();
-    const bool is_elidable = elidable_layer_ids.count(id) != 0;
-    return was_elidable != is_elidable;
+    if (changed) {
+        m_render_graph_dirty             = true;
+        m_scene_texture_release_required = true;
+    }
+    return changed;
 }
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property) {

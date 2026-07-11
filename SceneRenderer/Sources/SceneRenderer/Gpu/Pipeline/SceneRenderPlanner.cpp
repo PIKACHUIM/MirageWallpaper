@@ -280,7 +280,12 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
         auto& cam = scene.cameras.at(node->Camera());
         if (cam->HasImgEffect()) {
             auto* effect = cam->GetImgEffect().get();
-            if (effect->EffectCount() == 0 || effect->HasRuntimeVisibleEffect()) {
+            // A layer with a final resolve (notably text with an optional,
+            // currently-disabled effect) still needs its private target. If
+            // it is rendered directly to _rt_default while retaining the
+            // private ortho camera, the text's local pixel coordinates are
+            // projected over the whole scene.
+            if (effect->RequiresIntermediateTarget()) {
                 imgeff = effect;
                 output = imgeff->FirstTarget();
             }
@@ -415,7 +420,7 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
             });
     }
 
-    if (imgeff != nullptr && imgeff->HasRuntimeVisibleEffect()) loadEffect(imgeff);
+    if (imgeff != nullptr && imgeff->HasRenderEffects()) loadEffect(imgeff);
 }
 
 // Bottom-up collect: identify SceneNode subtrees whose every node can be

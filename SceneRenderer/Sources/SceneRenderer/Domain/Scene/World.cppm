@@ -2404,6 +2404,11 @@ public:
         m_render_graph_dirty = false;
         return dirty;
     }
+    bool ConsumeSceneTextureReleaseRequired() {
+        bool required                              = m_scene_texture_release_required;
+        m_scene_texture_release_required           = false;
+        return required;
+    }
     bool ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property);
     bool ApplyUserImageEffectVisibilityBindings(std::string_view      key,
                                                 const nlohmann::json& property);
@@ -2521,6 +2526,7 @@ private:
     uint32_t                                 m_resource_generation { 0 };
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
+    bool                                     m_scene_texture_release_required { false };
     Map<i32, std::string>                    m_render_group_cameras;
     std::vector<SceneUserPropertyDiagnostic> m_user_property_diagnostics;
 };
