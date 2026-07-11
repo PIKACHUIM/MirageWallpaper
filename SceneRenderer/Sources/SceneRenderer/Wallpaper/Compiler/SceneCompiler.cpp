@@ -2097,6 +2097,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     if ((wpimgobj.solid || wpimgobj.solid_layer) && ! has_author_effect && is_hidden_link_source) {
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
+    if (wpimgobj.composite_layer && ! has_author_effect) {
+        AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
+    }
 
     bool hasEffect = CountVisibleImageEffects(wpimgobj.effects) > 0;
 
@@ -2484,6 +2487,16 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             // container.
             scene.cameras.at(nodeAddr)->AttatchNode(spImgNode.as_ptr());
         }
+        if (wpimgobj.composite_layer) {
+            const std::string group_camera = nodeAddr + "_group";
+            const auto        group_extent =
+                NonZeroRenderTargetExtent(effect_target_size[0], effect_target_size[1]);
+            scene.cameras[group_camera] =
+                std::make_shared<SceneCamera>(group_extent[0], group_extent[1], -1.0f, 1.0f);
+            scene.cameras.at(group_camera)->AttatchNode(spImgNode.as_ptr());
+            scene.RegisterRenderGroup(WallpaperLayerId { .value = static_cast<i32>(wpimgobj.id) },
+                                      group_camera);
+        }
         spImgNode->SetCamera(nodeAddr);
         std::string effect_ppong_a, effect_ppong_b;
         effect_ppong_a = SR_EFFECT_PPONG_PREFIX_A.data() + nodeAddr;
@@ -2512,6 +2525,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 .allowReuse           = true,
                 .force_clear          = ! wpimgobj.fullscreen,
                 .clear_on_first_write = true,
+                .preserve_on_write    = wpimgobj.composite_layer,
             };
             if (wpimgobj.fullscreen) {
                 scene.renderTargets[effect_ppong_a].bind = { .enable = true, .screen = true };
@@ -3918,6 +3932,26 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             }
         }
 
+            auto resolve_node = rstd::sync::Arc<SceneNode>::make();
+            auto resolved     = load_passthrough_material(resolve_node.as_ptr(), ppong_a);
+            if (! resolved.has_value()) return;
+            auto resolve_mesh = std::make_shared<SceneMesh>();
+            resolve_mesh->AddMaterial(std::move(resolved->material));
+            resolve_node->AddMesh(std::move(resolve_mesh));
+            context.shader_updater->SetNodeData(resolve_node.as_ptr(), resolved->sv);
+            runtime_targets->effect_nodes.push_back(TextRuntimeEffectNode {
+                .node = resolve_node.as_ptr(),
+                .data = resolved->sv,
+            });
+            auto resolve_effect  = std::make_shared<SceneImageEffect>();
+            resolve_effect->name = "text_resolve";
+            resolve_effect->nodes.push_back(SceneImageEffectNode {
+                .output    = ppong_b,
+                .sceneNode = resolve_node.clone(),
+            });
+            layer->SetFinalResolveEffect(std::move(resolve_effect));
+        }
+        
         auto compose_mesh = std::make_shared<SceneMesh>(/*dynamic=*/wants_dynamic_text);
         GenCardMesh(*compose_mesh,
                     { static_cast<float>(runtime_targets->layer_w),

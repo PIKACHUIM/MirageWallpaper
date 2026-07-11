@@ -216,6 +216,7 @@ std::optional<ImageAssetInfo> sr::wpscene::LoadImageAssetInfo(fs::VFS&         v
 
 bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersion /*v*/) {
     sr::GetJsonValue(json, "image", image);
+    composite_layer = image == "models/util/composelayer.json";
     ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "alignment", alignment, false);
@@ -233,6 +234,10 @@ bool ImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersio
         sr::GetJsonValue(json, "origin", origin);
         sr::GetJsonValue(json, "angles", angles);
         sr::GetJsonValue(json, "scale", scale);
+        if (! sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false) && composite_layer) {
+            // WE gives composite containers the regular layer depth when the field is omitted.
+            parallaxDepth = { 1.0f, 1.0f };
+        }
         sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false);
         if (jImage.contains("width")) {
             int32_t w, h;
