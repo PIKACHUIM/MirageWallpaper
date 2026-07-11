@@ -29,3 +29,4 @@ build-*
 .claude
 .codex
 SteamWebAPI.swift
+xcuserdata
