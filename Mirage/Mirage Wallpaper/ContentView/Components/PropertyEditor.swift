@@ -162,194 +162,46 @@ struct PropertyRow: View {
     }
 }
 
-// MARK: - WE 标签 HTML → AttributedString
 
-// Wallpaper Engine 的属性/分组标签偶尔带一小撮 HTML：<b>/<i>/<br>/<font color>/
-// <a href>/<p>，以及会指向工坊路径的 <img>（在侧栏里根本加载不了）。这里做一个
-// 轻量、健壮的解析器：支持粗体 / 斜体 / 颜色 / 链接 / 换行，丢弃图片和未知标签，
-// 解码常见 HTML 实体。不依赖 WebKit，主线程零阻塞。
+// MARK: - WE 标签清洗
+
+// Wallpaper Engine 的属性 / 分组标签里常夹带 HTML，而且经常是残缺的：<big>、
+// <center>、<font color>、<a href>、跨行的 <img>、全角尖括号 ＜＞、以及被复制
+// 截断的未闭合标签。侧栏只需要「干净可读的文本」，不需要富文本渲染，也不该为此
+// 背上 WebKit（WKWebView / NSAttributedString HTML 导入器都要走主线程且开销大）。
+//
+// 因此这里不做富文本解析，而是用正则把标签整体剥离成纯文本：归一化全角尖括号、
+// 把换行类标签转成换行、去掉所有完整标签与未闭合的截断标签、解码实体、折叠空白。
+// 相比手写状态机，这种做法没有无穷无尽的边角情况，也不会把标签本身漏成文本。
 enum WERichText {
-    private struct Style {
-        var bold = false
-        var italic = false
-        var color: Color?
-        var link: URL?
-    }
-
     static func attributed(from raw: String) -> AttributedString {
-        guard looksLikeHTML(raw) else { return AttributedString(decodeEntities(raw)) }
-
-        var result = AttributedString()
-        var style = Style()
-        var stack: [(tag: String, style: Style)] = []
-
-        let chars = Array(raw)
-        var i = 0
-        var textBuffer = ""
-
-        func flushText() {
-            guard !textBuffer.isEmpty else { return }
-            var piece = AttributedString(decodeEntities(textBuffer))
-            if style.bold || style.italic {
-                var font = Font.body
-                if style.bold { font = font.bold() }
-                if style.italic { font = font.italic() }
-                piece.font = font
-            }
-            if let c = style.color { piece.foregroundColor = c }
-            if let l = style.link { piece.link = l }
-            result += piece
-            textBuffer = ""
-        }
-
-        while i < chars.count {
-            let ch = chars[i]
-            if ch == "<" {
-                // 找到闭合 '>'
-                guard let close = chars[i...].firstIndex(of: ">") else {
-                    // 没有闭合 '>' 的截断标签（如 `<a hef="...`）。若紧跟字母或
-                    // '/'，判定为一个被截断的 HTML 标签片段并整段丢弃，避免把
-                    // `<a href=...` 这种残留原样显示；否则当作普通的 '<' 字符。
-                    let next = i + 1 < chars.count ? chars[i + 1] : " "
-                    if next.isLetter || next == "/" {
-                        flushText()
-                        i = chars.count // 丢弃到结尾
-                    } else {
-                        textBuffer.append(ch); i += 1
-                    }
-                    continue
-                }
-                let tagContent = String(chars[(i + 1)..<close]).trimmingCharacters(in: .whitespaces)
-                i = close + 1
-                if tagContent.isEmpty { continue }
-
-                flushText()
-                let isClosing = tagContent.hasPrefix("/")
-                let body = isClosing ? String(tagContent.dropFirst()) : tagContent
-                let name = tagName(body).lowercased()
-
-                // 仅识别已知标签；把非标签的 '<...>'（如数学式 `<3>`、占位符）
-                // 当普通文本，避免误吞正文。
-                if !isClosing, !Self.knownTags.contains(name) {
-                    textBuffer.append("<")
-                    textBuffer.append(contentsOf: tagContent)
-                    textBuffer.append(">")
-                    continue
-                }
-
-                if isClosing {
-                    // 弹栈直到匹配的开标签，恢复样式。
-                    if let idx = stack.lastIndex(where: { $0.tag == name }) {
-                        style = stack[idx].style
-                        stack.removeSubrange(idx...)
-                    }
-                    if name == "p" || name == "div" { result += AttributedString("\n") }
-                    continue
-                }
-
-                switch name {
-                case "br":
-                    result += AttributedString("\n")
-                case "img":
-                    break // 丢弃图片
-                case "b", "strong":
-                    stack.append((name, style)); style.bold = true
-                case "i", "em":
-                    stack.append((name, style)); style.italic = true
-                case "u", "span":
-                    stack.append((name, style))
-                case "p", "div":
-                    stack.append((name, style))
-                case "font":
-                    stack.append((name, style))
-                    if let c = colorAttr(body) { style.color = c }
-                case "a":
-                    stack.append((name, style))
-                    if let href = hrefAttr(body), let url = URL(string: href) { style.link = url }
-                default:
-                    stack.append((name, style)) // 未知标签仅作用域占位
-                }
-            } else {
-                textBuffer.append(ch)
-                i += 1
-            }
-        }
-        flushText()
-        if result.runs.isEmpty { return AttributedString(decodeEntities(raw)) }
-        return result
+        AttributedString(clean(raw))
     }
 
-    // 已识别的 HTML 标签集合；其余 `<...>` 视作普通文本。
-    static let knownTags: Set<String> = [
-        "b", "strong", "i", "em", "u", "span", "p", "div", "font", "a", "br", "img",
-    ]
-
-    static func looksLikeHTML(_ s: String) -> Bool {
-        // 完整标签 `<tag ...>`；或被截断的开/闭标签 `<a href=...`（无闭合 '>'），
-        // 后者正是残留 `<a hef=...` 的来源，必须一并识别并交给解析器清理。
-        if s.range(of: "<[a-zA-Z!/][^>]*>", options: .regularExpression) != nil { return true }
-        if s.range(of: "<[a-zA-Z/][a-zA-Z0-9]*[ =/]", options: .regularExpression) != nil {
-            return true
+    static func clean(_ raw: String) -> String {
+        var s = raw
+            .replacingOccurrences(of: "＜", with: "<")
+            .replacingOccurrences(of: "＞", with: ">")
+        func regexReplace(_ pattern: String, _ replacement: String) {
+            s = s.replacingOccurrences(of: pattern, with: replacement,
+                                       options: [.regularExpression, .caseInsensitive])
         }
-        return false
-    }
-
-    private static func tagName(_ body: String) -> String {
-        var name = ""
-        for c in body {
-            if c == " " || c == "\t" || c == "/" || c == ">" { break }
-            name.append(c)
-        }
-        return name
-    }
-
-    private static func attribute(_ body: String, _ attr: String) -> String? {
-        // 匹配 attr="..." / attr='...' / attr=xxx
-        let patterns = [
-            "\(attr)\\s*=\\s*\"([^\"]*)\"",
-            "\(attr)\\s*=\\s*'([^']*)'",
-            "\(attr)\\s*=\\s*([^\\s>]+)",
-        ]
-        for p in patterns {
-            if let r = body.range(of: p, options: [.regularExpression, .caseInsensitive]) {
-                let match = String(body[r])
-                if let eq = match.firstIndex(of: "=") {
-                    var val = String(match[match.index(after: eq)...])
-                        .trimmingCharacters(in: .whitespaces)
-                    val = val.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                    return val
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func hrefAttr(_ body: String) -> String? { attribute(body, "href") }
-
-    private static func colorAttr(_ body: String) -> Color? {
-        guard let raw = attribute(body, "color") else { return nil }
-        return parseCSSColor(raw)
-    }
-
-    private static let namedColors: [String: Color] = [
-        "black": .black, "white": .white, "red": .red, "green": .green,
-        "blue": .blue, "yellow": .yellow, "orange": .orange, "purple": .purple,
-        "gray": .gray, "grey": .gray, "cyan": .cyan, "pink": .pink,
-    ]
-
-    private static func parseCSSColor(_ raw: String) -> Color? {
-        let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
-        if let named = namedColors[s] { return named }
-        var hex = s
-        if hex.hasPrefix("#") { hex.removeFirst() }
-        if hex.count == 3 {
-            hex = hex.map { "\($0)\($0)" }.joined()
-        }
-        guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return nil }
-        let r = Double((v >> 16) & 0xFF) / 255.0
-        let g = Double((v >> 8) & 0xFF) / 255.0
-        let b = Double(v & 0xFF) / 255.0
-        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+        // 换行类标签 → 换行，保留原有分行。
+        regexReplace("<\\s*br\\s*/?>", "\n")
+        regexReplace("<\\s*/?\\s*(p|div|center)\\s*>", "\n")
+        // 去掉所有其余完整标签（[^>] 会跨行匹配，覆盖跨行 <img …>）。
+        regexReplace("<[^>]*>", "")
+        // 去掉未闭合的截断标签：'<'（可含 '/'/空格）后跟字母、直到串尾。
+        // 数字/符号开头的 '<'（如 `价格<3元`、`a < b`）不动，避免误伤正文。
+        regexReplace("<\\s*/?\\s*[a-zA-Z][^<]*$", "")
+        // 整行只剩一个残缺的闭合标签（作者漏了 '<'，如单独一行 `center>`）时删掉整行。
+        // 仅当整行就是「标签名 + '>'」才匹配，绝不误伤 `so big > small` 这类正文。
+        regexReplace("(?m)^[ \\t]*/?(?:center|big|small|strong|font|span|div|sub|sup|b|i|u|p|a)[ \\t]*>[ \\t]*$", "")
+        s = decodeEntities(s)
+        // 折叠多余空白与空行。
+        regexReplace("[ \\t]+", " ")
+        regexReplace("\\n{3,}", "\n\n")
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func decodeEntities(_ s: String) -> String {
