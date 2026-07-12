@@ -792,9 +792,10 @@ void InstallLocalStorage(JSContext* ctx) {
     JS_FreeValue(ctx, g);
 }
 
-// Project normalised canvas coordinates into the scene's world units.
-// Hosts feed pointer Y top-down; the scene world uses Y-up, matching
-// link_mouse particles and SceneCamera's orthographic viewport.
+// Project normalised canvas coordinates into scene world units. Both the
+// pointer Y and scene layer origins are top-down, so no Y flip: the result
+// must match SceneNode::ModelTrans / thisLayer.origin space, which drives
+// HitTestNode and the worldPosition scripts assign back to a layer's origin.
 struct CursorWorld {
     double x { 0 }, y { 0 };
 };
@@ -802,7 +803,7 @@ struct CursorWorld {
 CursorWorld CursorToWorld(const FrameInputs& fi) {
     return CursorWorld {
         .x = double(fi.cursor_x) * double(fi.canvas_w),
-        .y = (1.0 - double(fi.cursor_y)) * double(fi.canvas_h),
+        .y = double(fi.cursor_y) * double(fi.canvas_h),
     };
 }
 
