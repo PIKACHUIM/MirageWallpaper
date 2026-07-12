@@ -3,6 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>NSAppTransportSecurity</key>
-	<dict/>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
