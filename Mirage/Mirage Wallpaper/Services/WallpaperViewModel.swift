@@ -217,8 +217,6 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 属性实时下发
 
-    private var scenePropertyReloadTimer: Timer?
-
     func setProperty(key: String, value: WEPropertyValue) {
         guard var prop = currentWallpaper.project.general?.properties?.items[key] else { return }
         prop.value = value
@@ -226,23 +224,12 @@ class WallpaperViewModel: ObservableObject {
         saveRuntime()
 
         switch currentWallpaper.kind {
-        case .web:
+        case .web, .scene:
+            // 场景与网页渲染器都支持实时属性通道：颜色 / 透明度 / 开关(可见性) /
+            // 下拉(shader combo & 脚本属性) / 文本 / 字号 均即时生效，无需重启进程。
             renderer.setProperty(key: key, property: prop)
-        case .scene:
-            // bool/combo 需要重启场景进程才能稳定生效。
-            renderer.setProperty(key: key, property: prop)
-            if prop.propertyType == .bool || prop.propertyType == .combo {
-                scheduleSceneReload()
-            }
         case .video, .unsupported:
             break
-        }
-    }
-
-    private func scheduleSceneReload() {
-        scenePropertyReloadTimer?.invalidate()
-        scenePropertyReloadTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
-            self?.reapplyCurrent()
         }
     }
 
@@ -253,7 +240,6 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func resetProperties() {
-        scenePropertyReloadTimer?.invalidate()
         runtime = WallpaperRuntimeState()
         saveRuntime()
         suppressPlaybackSideEffects = true
