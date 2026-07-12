@@ -971,14 +971,24 @@ bool Scene::CommitNodeVisibilityChanges() {
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
+    bool matched_binding = false;
     for (auto* node : m_resource_index.Nodes()) {
         if (node == nullptr) continue;
         if (auto visible =
                 ResolveSceneUserVisibilityBinding(node->VisibleUserBinding(), key, property)) {
             SetNodeVisible(*node, *visible);
+            matched_binding = true;
         }
     }
-    return CommitNodeVisibilityChanges();
+    bool requires_graph_rebuild = CommitNodeVisibilityChanges();
+    // A user toggle of a layer's visibility must always recompile the graph:
+    // at load the node's Visible() bool can already match the toggled value
+    // while the compiled graph still elided it, so the elision-delta check
+    // above misses it and the first toggle would no-op until the next edit.
+    // This path is user-driven only (never the per-frame script tick), so an
+    // unconditional rebuild on a real binding match is cheap and correct.
+    if (matched_binding) requires_graph_rebuild = true;
+    return requires_graph_rebuild;
 }
 
 std::optional<SceneImageEffectRef> Scene::FindNodeImageEffect(const SceneNode& node,
