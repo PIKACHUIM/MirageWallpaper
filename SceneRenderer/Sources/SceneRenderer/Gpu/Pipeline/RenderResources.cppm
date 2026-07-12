@@ -328,7 +328,9 @@ public:
             rstd_error("parse tex \"{}\" failed", request.name);
             return std::nullopt;
         }
-        return m_device->tex_cache().CreateTex(*image);
+        auto slots = m_device->tex_cache().CreateTex(*image);
+        m_device->tex_cache().MarkVideoTextureActive(image->key);
+        return slots;
     }
 
     void MarkShareReady(std::string_view key) const { m_device->tex_cache().MarkShareReady(key); }

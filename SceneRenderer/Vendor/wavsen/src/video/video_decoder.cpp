@@ -1223,6 +1223,66 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
     }
 }
 
+int VideoDecoder::discard_frame_(double& pts_seconds, Error* err) {
+    State& st = *st_;
+    bool   looped = false;
+
+    while (true) {
+        int rc = avcodec_receive_frame(st.cctx.get(), st.src_frame.get());
+        if (rc == 0) {
+            const int64_t pts = (st.src_frame->best_effort_timestamp != AV_NOPTS_VALUE)
+                ? st.src_frame->best_effort_timestamp
+                : st.src_frame->pts;
+            pts_seconds = (pts == AV_NOPTS_VALUE)
+                ? -1.0
+                : static_cast<double>(pts) * ffi::av_q2d(st.stream_tb);
+
+            // Crucially, do not transfer a VideoToolbox surface to CPU or run
+            // swscale for frames which will never be presented.
+            av_frame_unref(st.src_frame.get());
+            if (st.sw_frame) av_frame_unref(st.sw_frame.get());
+            return looped ? 2 : 0;
+        }
+        if (rc == AVERROR_EOF) {
+            if (loop_) {
+                if (!seek_to_start(st)) {
+                    fail(err, "loop seek-to-zero failed");
+                    return -1;
+                }
+                looped = true;
+                continue;
+            }
+            return 1;
+        }
+        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+            fail(err, "avcodec_receive_frame: " + av_err_str(rc));
+            return -1;
+        }
+        if (st.flushing) continue;
+
+        rc = av_read_frame(st.fmt.get(), st.pkt.get());
+        if (rc == AVERROR_EOF) {
+            avcodec_send_packet(st.cctx.get(), nullptr);
+            st.flushing = true;
+            continue;
+        }
+        if (rc < 0) {
+            fail(err, "av_read_frame: " + av_err_str(rc));
+            return -1;
+        }
+        if (st.pkt->stream_index != st.video_idx) {
+            av_packet_unref(st.pkt.get());
+            continue;
+        }
+        rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
+        av_packet_unref(st.pkt.get());
+        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+            fail(err, "avcodec_send_packet: " + av_err_str(rc));
+            return -1;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public Result wrappers for the per-frame pull
 // ---------------------------------------------------------------------------
@@ -1230,6 +1290,15 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
 auto VideoDecoder::next_frame(Nv12Frame& out) -> rstd::Result<NextFrame, Error> {
     Error err;
     int   rc = next_frame_(out, &err);
+    if (rc < 0) return rstd::Err(std::move(err));
+    if (rc == 1) return rstd::Ok(NextFrame::Eof);
+    if (rc == 2) return rstd::Ok(NextFrame::Looped);
+    return rstd::Ok(NextFrame::Ok);
+}
+
+auto VideoDecoder::discard_frame(double& pts_seconds) -> rstd::Result<NextFrame, Error> {
+    Error err;
+    int   rc = discard_frame_(pts_seconds, &err);
     if (rc < 0) return rstd::Err(std::move(err));
     if (rc == 1) return rstd::Ok(NextFrame::Eof);
     if (rc == 2) return rstd::Ok(NextFrame::Looped);

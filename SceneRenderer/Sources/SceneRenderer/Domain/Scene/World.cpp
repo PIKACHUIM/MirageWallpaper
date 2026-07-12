@@ -935,39 +935,50 @@ void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
 }
 
 bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
-    const i32  id           = node.ID();
-    const bool was_elidable = id >= 0 && elidable_layer_ids.count(id) != 0;
+    if (node.Visible() == visible) return false;
+
+    const i32 id = node.ID();
     node.SetVisible(visible);
     if (id < 0) return false;
 
-    bool changed = false;
-    if (! visible) {
-        MarkLayerVisibilityElidable(WallpaperLayerId { .value = id });
+    // Do not mutate visibility_elidable_layer_ids here. A script may set the
+    // same layer false and true before the frame is drawn; only its final
+    // state determines whether the compiled render graph needs to change.
+    m_pending_node_visibility_changes[id] = &node;
+    return true;
+}
+
+bool Scene::CommitNodeVisibilityChanges() {
+    bool requires_graph_rebuild = false;
+    for (const auto& [id, node] : m_pending_node_visibility_changes) {
+        if (node == nullptr) continue;
+
+        const bool was_elidable = elidable_layer_ids.count(id) != 0;
+        if (! node->Visible()) {
+            MarkLayerVisibilityElidable(WallpaperLayerId { .value = id });
+        } else if (visibility_elidable_layer_ids.erase(id) != 0) {
+            RebuildElidableLayerIds();
+        }
+
         const bool is_elidable = elidable_layer_ids.count(id) != 0;
-        changed = was_elidable != is_elidable;
-    } else if (visibility_elidable_layer_ids.erase(id) != 0) {
-        RebuildElidableLayerIds();
-        const bool is_elidable = elidable_layer_ids.count(id) != 0;
-        changed = was_elidable != is_elidable;
+        requires_graph_rebuild |= was_elidable != is_elidable;
     }
-    if (changed) {
-        m_render_graph_dirty             = true;
-        m_scene_texture_release_required = true;
-    }
-    return changed;
+    m_pending_node_visibility_changes.clear();
+
+    if (requires_graph_rebuild) m_render_graph_dirty = true;
+    return requires_graph_rebuild;
 }
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property) {
-    bool requires_graph_rebuild = false;
     if (m_resource_index.Empty()) RebuildResourceIndex();
     for (auto* node : m_resource_index.Nodes()) {
         if (node == nullptr) continue;
         if (auto visible =
                 ResolveSceneUserVisibilityBinding(node->VisibleUserBinding(), key, property)) {
-            requires_graph_rebuild |= SetNodeVisible(*node, *visible);
+            SetNodeVisible(*node, *visible);
         }
     }
-    return requires_graph_rebuild;
+    return CommitNodeVisibilityChanges();
 }
 
 std::optional<SceneImageEffectRef> Scene::FindNodeImageEffect(const SceneNode& node,

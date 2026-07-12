@@ -799,6 +799,7 @@ struct TextureCache::VideoRegistry {
             std::numeric_limits<double>::quiet_NaN()
         };
         double                                       frame_interval { 1.0 / 30.0 };
+        uint64_t                                     active_epoch { 0 };
         bool                                         have_frame { false };
     };
     std::vector<std::unique_ptr<Slot>> slots;
@@ -865,7 +866,9 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
 
     auto slot = std::make_unique<VideoRegistry::Slot>();
     slot->key = image.key;
-    /* NV12 chroma is 4:2:0 → both dims even. */
+    /* NV12 chroma is 4:2:0 → both dimensions must be even. Keep the source
+     * dimensions: video decode must not be used as a quality/performance
+     * trade-off. */
     slot->width  = static_cast<std::uint32_t>(mip.width | (mip.width & 1));
     slot->height = static_cast<std::uint32_t>(mip.height | (mip.height & 1));
     if (slot->width != static_cast<std::uint32_t>(mip.width))
@@ -1033,6 +1036,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
 
     for (auto& up : m_video_registry->slots) {
         auto& s = *up;
+        if (s.active_epoch != m_video_activity_epoch) continue;
         s.pts_acc += dt_seconds;
 
         auto it = m_tex_map.find(s.key);
@@ -1052,21 +1056,35 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             continue;
         }
 
-        /* Drain decoded frames until we catch up to wall time. Cap to
-         * 4 frames per tick to avoid spiral-of-death on heavy stalls. */
+        /* Catch up to wall time without downloading every obsolete 4K frame.
+         * For software/VideoToolbox frames we advance stale decoder output
+         * cheaply, then transfer and convert only the newest frame that can
+         * actually be presented this tick. */
         bool got_new = false;
-        for (int i = 0; i < 4; ++i) {
+        constexpr int kMaxAdvancePerTick = 12;
+        for (int i = 0; i < kMaxAdvancePerTick; ++i) {
             if (s.last_pts >= 0.0 && s.last_pts > s.pts_acc) break;
 
             rstd::Result<wavsen::video::NextFrame, wavsen::video::Error> r =
                 rstd::Ok(wavsen::video::NextFrame::Ok);
-            switch (fkind) {
-            case wavsen::video::FrameKind::VulkanShared: r = s.decoder->next_vk_frame(vkv); break;
-            case wavsen::video::FrameKind::Sw: r = s.decoder->next_frame(s.nv12_scratch); break;
-            case wavsen::video::FrameKind::VideoToolboxSw:
-                r = s.decoder->next_frame(s.nv12_scratch);
-                break;
-            default: break;
+            double discarded_pts = -1.0;
+            const bool discard = fkind != wavsen::video::FrameKind::VulkanShared &&
+                                 s.last_pts >= 0.0 &&
+                                 s.last_pts + s.frame_interval < s.pts_acc &&
+                                 i + 1 < kMaxAdvancePerTick;
+            if (discard) {
+                r = s.decoder->discard_frame(discarded_pts);
+            } else {
+                switch (fkind) {
+                case wavsen::video::FrameKind::VulkanShared:
+                    r = s.decoder->next_vk_frame(vkv);
+                    break;
+                case wavsen::video::FrameKind::Sw: r = s.decoder->next_frame(s.nv12_scratch); break;
+                case wavsen::video::FrameKind::VideoToolboxSw:
+                    r = s.decoder->next_frame(s.nv12_scratch);
+                    break;
+                default: break;
+                }
             }
             if (r.is_err()) {
                 rstd_error("PumpVideoTextures[{}]: decode {}: {}",
@@ -1087,21 +1105,26 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                 s.pts_origin = std::numeric_limits<double>::quiet_NaN();
                 s.last_pts   = -1.0;
             }
-            double frame_pts = -1.0;
-            switch (fkind) {
-            case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
-            case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
-            case wavsen::video::FrameKind::VideoToolboxSw:
-                frame_pts = s.nv12_scratch.pts_seconds;
-                break;
-            default: break;
+            double frame_pts = discarded_pts;
+            if (! discard) {
+                switch (fkind) {
+                case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
+                case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
+                case wavsen::video::FrameKind::VideoToolboxSw:
+                    frame_pts = s.nv12_scratch.pts_seconds;
+                    break;
+                default: break;
+                }
             }
             advance_slot_pts(s, frame_pts);
-            got_new = true;
+            if (! discard) got_new = true;
             if (decoder_looped) {
                 s.pts_acc = std::max(s.last_pts, 0.0);
                 break;
             }
+            if (discard) continue;
+
+            break; // one transfer/conversion/upload per presented frame
         }
         if (! got_new && s.have_frame) continue; /* nothing to upload */
         if (! got_new) continue;
@@ -1270,10 +1293,28 @@ void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
     }
 }
 
+void TextureCache::BeginVideoTextureActivity() {
+    ++m_video_activity_epoch;
+    // Keep zero as the sentinel for a slot that has never been referenced by
+    // a compiled render graph.
+    if (m_video_activity_epoch == 0) ++m_video_activity_epoch;
+}
+
+void TextureCache::MarkVideoTextureActive(std::string_view key) {
+    if (! m_video_registry) return;
+    for (auto& slot : m_video_registry->slots) {
+        if (slot && slot->key == key) {
+            slot->active_epoch = m_video_activity_epoch;
+            return;
+        }
+    }
+}
+
 void TextureCache::Clear() {
     m_tex_map.clear();
     ClearTransientGraphResources();
     if (m_video_registry) m_video_registry->slots.clear();
+    m_video_activity_epoch = 0;
     m_pending_uploads.clear();
     m_recorded_uploads.clear();
 }

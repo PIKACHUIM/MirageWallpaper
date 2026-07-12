@@ -369,6 +369,11 @@ public:
 
     void SetVideoDecodeOptions(VideoDecodeOptions);
 
+    // Render-graph compilation brackets the imported textures it actually
+    // samples. Hidden scene video layers remain cached but are not decoded.
+    void BeginVideoTextureActivity();
+    void MarkVideoTextureActive(std::string_view key);
+
     std::optional<VmaImageParameters> CreateRenderTargetTex(uint32_t width, uint32_t height,
                                                             VkFormat);
     ImageSlotsRef                    CreateTex(Image&);
@@ -417,6 +422,7 @@ private:
     Map<std::string, ImageSlots> m_tex_map;
     VideoDecodeOptions           m_video_decode_options;
     uint64_t                     m_next_image_generation { 1 };
+    uint64_t                     m_video_activity_epoch { 0 };
 
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep wavsen.video out of the public

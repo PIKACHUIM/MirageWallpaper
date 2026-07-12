@@ -1312,6 +1312,7 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
+    m_device->tex_cache().BeginVideoTextureActivity();
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 
@@ -1330,6 +1331,7 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
     m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
+    m_device->tex_cache().BeginVideoTextureActivity();
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 

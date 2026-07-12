@@ -189,6 +189,11 @@ public:
 
     auto next_frame(Nv12Frame& out) -> rstd::Result<NextFrame, Error>;
 
+    // Advance one decoded frame without downloading/scaling it into NV12.
+    // Used when the presenter is behind wall time and only the newest frame
+    // can be displayed.
+    auto discard_frame(double& pts_seconds) -> rstd::Result<NextFrame, Error>;
+
     // Which pump matches the active backend. `using_vk_frames()` is the
     // legacy boolean accessor — true iff kind() == VulkanShared.
     FrameKind kind() const           { return kind_; }
@@ -229,6 +234,7 @@ private:
     // Internal frame-pull helpers using the legacy in/out style. The
     // returned int encodes: 0 = ok, 1 = eof, -1 = error.
     int next_frame_(Nv12Frame& out, Error* err);
+    int discard_frame_(double& pts_seconds, Error* err);
     int next_vk_frame_(VkFrameView& out, Error* err);
     int next_drm_frame_(DrmFrameView& out, Error* err);
 

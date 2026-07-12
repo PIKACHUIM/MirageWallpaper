@@ -1000,17 +1000,12 @@ void SceneRenderController::on(RenderDraw&&) {
                 std::span<const float, 64>(fi.audio_right));
             m_scene->TickNodeFieldAnimations();
             sr::script::TickSceneScripts(*m_scene, fi);
+            m_scene->CommitNodeVisibilityChanges();
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
             if (m_scene->ConsumeRenderGraphDirty()) {
-                // An elided layer can own an embedded video. Once script makes
-                // another such layer visible, retaining the old scene textures
-                // would keep its decoder running even though no pass samples it.
-                const auto retention = m_scene->ConsumeSceneTextureReleaseRequired()
-                                           ? vulkan::RenderGraphResourceRetention::ReleaseSceneTextures
-                                           : vulkan::RenderGraphResourceRetention::KeepSceneTextures;
-                rebuildRenderGraph(retention, false);
+                rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
             }
         }
         m_scene->paritileSys->Emitt();
@@ -1060,7 +1055,6 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     consumeDirtyEventsCoveredByGraphRebuild();
     (void)m_scene->ConsumeRenderGraphDirty();
-    (void)m_scene->ConsumeSceneTextureReleaseRequired();
 }
 
 void SceneRenderController::consumeDirtyEventsCoveredByGraphRebuild() {
