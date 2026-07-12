@@ -5,39 +5,88 @@
 //
 
 import SwiftUI
+import WebKit
+import UniformTypeIdentifiers
 
+// MARK: - 属性面板
+
+// 忠实还原 Wallpaper Engine 的自定义侧栏：全部属性类型、条件显隐（JS 表达式）、
+// 官方本地化、真 HTML 标签（内联图片 / 可点链接 / 居中 / 大字 / 颜色）。
 struct PropertyEditor: View {
     @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
     let wallpaper: WEWallpaper
 
-    private var properties: [(key: String, property: WEProjectProperty)] {
+    // condition 求值器：每个面板一份，随取值刷新上下文。
+    @StateObject private var conditions = ConditionStore()
+
+    private var allProperties: [String: WEProjectProperty] {
+        wallpaper.project.general?.properties?.items ?? [:]
+    }
+
+    private var sortedProperties: [(key: String, property: WEProjectProperty)] {
         wallpaper.project.general?.properties?.sorted ?? []
     }
 
+    // 经 condition 过滤后的可见属性。
+    private var visibleProperties: [(key: String, property: WEProjectProperty)] {
+        sortedProperties.filter { conditions.isVisible($0.property.condition) }
+    }
+
     var body: some View {
-        if properties.isEmpty {
-            HStack {
-                Text("此壁纸没有可调节的属性。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(properties, id: \.key) { entry in
-                    PropertyRow(wallpaper: wallpaper, key: entry.key, property: entry.property)
-                        .environmentObject(wallpaperViewModel)
+        Group {
+            if sortedProperties.isEmpty {
+                HStack {
+                    Text("此壁纸没有可调节的属性。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(visibleProperties, id: \.key) { entry in
+                        PropertyRow(wallpaper: wallpaper, key: entry.key,
+                                    property: entry.property, conditions: conditions)
+                            .environmentObject(wallpaperViewModel)
+                    }
                 }
             }
         }
+        .onAppear { refreshConditions() }
+        .onChange(of: wallpaperViewModel.runtime.propertyOverrides) { _, _ in refreshConditions() }
+        .onChange(of: wallpaper.id) { _, _ in refreshConditions() }
+    }
+
+    private func refreshConditions() {
+        conditions.update(properties: allProperties,
+                          overrides: wallpaperViewModel.runtime.propertyOverrides)
     }
 }
+
+// 把 condition 求值器包成 ObservableObject，取值变化时触发面板重算可见性。
+final class ConditionStore: ObservableObject {
+    private let evaluator = WEConditionEvaluator()
+    // 变化计数，用来在取值更新后驱动依赖它的视图刷新。
+    @Published private(set) var generation = 0
+
+    func update(properties: [String: WEProjectProperty], overrides: [String: WEPropertyValue]) {
+        evaluator.updateContext(properties: properties, overrides: overrides)
+        generation &+= 1
+    }
+
+    func isVisible(_ condition: String?) -> Bool {
+        _ = generation // 建立依赖
+        return evaluator.evaluate(condition)
+    }
+}
+
+// MARK: - 单条属性
 
 struct PropertyRow: View {
     @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
     let wallpaper: WEWallpaper
     let key: String
     let property: WEProjectProperty
+    @ObservedObject var conditions: ConditionStore
 
     private var currentValue: WEPropertyValue {
         wallpaperViewModel.runtime.propertyOverrides[key] ?? property.value
@@ -45,16 +94,20 @@ struct PropertyRow: View {
 
     private var rawText: String { property.displayText(fallbackKey: key) }
 
-    // 属性标签可能带 Wallpaper Engine 的 HTML（粗体 / 颜色 / 链接 / 图片）。
-    // 用原生 AttributedString 渲染，彻底摆脱 WKWebView 带来的卡顿、坏图、
-    // 横向滚动条、滚轮失灵、异步测高错位等问题。图片直接丢弃。
+    // 标签：含真 HTML（图片 / 链接 / 居中 / 大字 / 颜色）时用 WKWebView 忠实渲染；
+    // 纯文本 / 轻量格式则用原生 Text，避免为每一行都背上 WebKit。
     @ViewBuilder
     private func labelView(lineLimit: Int? = nil, expand: Bool = true) -> some View {
-        Text(WERichText.attributed(from: rawText))
-            .lineLimit(lineLimit)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: expand ? .infinity : nil, alignment: .leading)
+        if WEHTML.isRich(rawText) {
+            RichHTMLText(html: rawText)
+                .frame(maxWidth: expand ? .infinity : nil, alignment: .leading)
+        } else {
+            Text(WEHTML.plain(rawText))
+                .lineLimit(lineLimit)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: expand ? .infinity : nil, alignment: .leading)
+        }
     }
 
     var body: some View {
@@ -63,7 +116,7 @@ struct PropertyRow: View {
             Toggle(isOn: Binding(
                 get: { currentValue.boolValue },
                 set: { wallpaperViewModel.setProperty(key: key, value: .bool($0)) })) {
-                labelView(lineLimit: nil)
+                labelView()
             }
 
         case .slider:
@@ -90,58 +143,129 @@ struct PropertyRow: View {
                 get: { Self.parseColor(currentValue.stringValue) },
                 set: { wallpaperViewModel.setProperty(key: key, value: .string(Self.encodeColor($0))) }),
                 supportsOpacity: false) {
-                labelView(lineLimit: 1)
+                labelView(lineLimit: 2)
             }
 
         case .combo:
-            HStack {
-                labelView(lineLimit: 1, expand: false)
+            HStack(alignment: .firstTextBaseline) {
+                labelView(lineLimit: 2, expand: false)
                 Spacer()
                 Picker("", selection: Binding(
                     get: { currentValue.stringValue },
                     set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) })) {
-                    ForEach(property.options ?? [], id: \.value) { opt in
+                    ForEach(visibleOptions, id: \.value) { opt in
                         Text(WELocalization.resolve(opt.label)).tag(opt.value)
                     }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 150)
+                .frame(maxWidth: 170)
             }
 
         case .textinput:
             VStack(alignment: .leading, spacing: 4) {
-                labelView(lineLimit: 1)
+                labelView(lineLimit: 2)
                 TextField("", text: Binding(
                     get: { currentValue.stringValue },
                     set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) }))
                     .textFieldStyle(.roundedBorder)
             }
 
+        case .text:
+            labelView()
+
         case .group:
-            // 分组标题：作为分节标题渲染，恢复侧栏层次。
             VStack(alignment: .leading, spacing: 4) {
-                Text(WERichText.attributed(from: rawText))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if WEHTML.isRich(rawText) {
+                    RichHTMLText(html: rawText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(WEHTML.plain(rawText))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Divider().overlay(Color.accentColor.opacity(0.5))
             }
             .padding(.top, 10)
 
-        case .text:
-            labelView(lineLimit: nil)
+        case .file, .scenetexture:
+            filePickerRow(kind: .file)
 
-        case .file, .unknown:
+        case .directory:
+            filePickerRow(kind: .directory)
+
+        case .usershortcut:
+            HStack(alignment: .firstTextBaseline) {
+                labelView(lineLimit: 2, expand: false)
+                Spacer()
+                TextField("快捷方式", text: Binding(
+                    get: { currentValue.stringValue },
+                    set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) }))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 170)
+            }
+
+        case .unknown:
             EmptyView()
+        }
+    }
+
+    // 只显示满足自身 condition 的下拉选项（WE 每个 option 也可带 condition）。
+    private var visibleOptions: [WEProjectPropertyOption] {
+        (property.options ?? []).filter { conditions.isVisible($0.condition) }
+    }
+
+    // MARK: 文件 / 目录 / 贴图选择
+
+    private enum PickKind { case file, directory }
+
+    @ViewBuilder
+    private func filePickerRow(kind: PickKind) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            labelView(lineLimit: 2)
+            HStack {
+                Text(displayPath.isEmpty ? "未选择" : displayPath)
+                    .font(.caption)
+                    .foregroundStyle(displayPath.isEmpty ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                if !displayPath.isEmpty {
+                    Button {
+                        wallpaperViewModel.setProperty(key: key, value: .string(""))
+                    } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
+                Button("选择…") { pick(kind: kind) }
+            }
+        }
+    }
+
+    private var displayPath: String {
+        let p = currentValue.stringValue
+        guard !p.isEmpty else { return "" }
+        return (p as NSString).lastPathComponent
+    }
+
+    private func pick(kind: PickKind) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = kind == .file
+        panel.canChooseDirectories = kind == .directory
+        panel.allowsMultipleSelection = false
+        if kind == .file, property.propertyType != .file {
+            panel.allowedContentTypes = [.image] // scenetexture：限图片
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            wallpaperViewModel.setProperty(key: key, value: .string(url.path))
         }
     }
 
     private var sliderRange: ClosedRange<Double> {
         let lo = property.min ?? 0
         let hi = property.max ?? 100
-        // 防御非法区间（max <= min 会让 Slider 崩溃）。
         return lo < hi ? lo...hi : lo...(lo + 1)
     }
 
@@ -159,91 +283,5 @@ struct PropertyRow: View {
     static func encodeColor(_ color: Color) -> String {
         let ns = NSColor(color).usingColorSpace(.sRGB) ?? .white
         return String(format: "%.5f %.5f %.5f", ns.redComponent, ns.greenComponent, ns.blueComponent)
-    }
-}
-
-
-// MARK: - WE 标签清洗
-
-// Wallpaper Engine 的属性 / 分组标签里常夹带 HTML，而且经常是残缺的：<big>、
-// <center>、<font color>、<a href>、跨行的 <img>、全角尖括号 ＜＞、以及被复制
-// 截断的未闭合标签。侧栏只需要「干净可读的文本」，不需要富文本渲染，也不该为此
-// 背上 WebKit（WKWebView / NSAttributedString HTML 导入器都要走主线程且开销大）。
-//
-// 因此这里不做富文本解析，而是用正则把标签整体剥离成纯文本：归一化全角尖括号、
-// 把换行类标签转成换行、去掉所有完整标签与未闭合的截断标签、解码实体、折叠空白。
-// 相比手写状态机，这种做法没有无穷无尽的边角情况，也不会把标签本身漏成文本。
-enum WERichText {
-    static func attributed(from raw: String) -> AttributedString {
-        AttributedString(clean(raw))
-    }
-
-    static func clean(_ raw: String) -> String {
-        var s = raw
-            .replacingOccurrences(of: "＜", with: "<")
-            .replacingOccurrences(of: "＞", with: ">")
-        func regexReplace(_ pattern: String, _ replacement: String) {
-            s = s.replacingOccurrences(of: pattern, with: replacement,
-                                       options: [.regularExpression, .caseInsensitive])
-        }
-        // 换行类标签 → 换行，保留原有分行。
-        regexReplace("<\\s*br\\s*/?>", "\n")
-        regexReplace("<\\s*/?\\s*(p|div|center)\\s*>", "\n")
-        // 去掉所有其余完整标签（[^>] 会跨行匹配，覆盖跨行 <img …>）。
-        regexReplace("<[^>]*>", "")
-        // 去掉未闭合的截断标签：'<'（可含 '/'/空格）后跟字母、直到串尾。
-        // 数字/符号开头的 '<'（如 `价格<3元`、`a < b`）不动，避免误伤正文。
-        regexReplace("<\\s*/?\\s*[a-zA-Z][^<]*$", "")
-        // 整行只剩一个残缺的闭合标签（作者漏了 '<'，如单独一行 `center>`）时删掉整行。
-        // 仅当整行就是「标签名 + '>'」才匹配，绝不误伤 `so big > small` 这类正文。
-        regexReplace("(?m)^[ \\t]*/?(?:center|big|small|strong|font|span|div|sub|sup|b|i|u|p|a)[ \\t]*>[ \\t]*$", "")
-        s = decodeEntities(s)
-        // 折叠多余空白与空行。
-        regexReplace("[ \\t]+", " ")
-        regexReplace("\\n{3,}", "\n\n")
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func decodeEntities(_ s: String) -> String {
-        guard s.contains("&") else { return s }
-        var out = ""
-        out.reserveCapacity(s.count)
-        var i = s.startIndex
-        while i < s.endIndex {
-            let c = s[i]
-            if c == "&", let semi = s[i...].firstIndex(of: ";") {
-                let entity = String(s[s.index(after: i)..<semi])
-                if let decoded = decodeEntity(entity) {
-                    out.append(decoded)
-                    i = s.index(after: semi)
-                    continue
-                }
-            }
-            out.append(c)
-            i = s.index(after: i)
-        }
-        return out
-    }
-
-    private static func decodeEntity(_ e: String) -> Character? {
-        switch e.lowercased() {
-        case "amp": return "&"
-        case "lt": return "<"
-        case "gt": return ">"
-        case "quot": return "\""
-        case "apos", "#39": return "'"
-        case "nbsp": return "\u{00A0}"
-        default: break
-        }
-        if e.hasPrefix("#x") || e.hasPrefix("#X") {
-            if let v = UInt32(e.dropFirst(2), radix: 16), let scalar = Unicode.Scalar(v) {
-                return Character(scalar)
-            }
-        } else if e.hasPrefix("#") {
-            if let v = UInt32(e.dropFirst()), let scalar = Unicode.Scalar(v) {
-                return Character(scalar)
-            }
-        }
-        return nil
     }
 }

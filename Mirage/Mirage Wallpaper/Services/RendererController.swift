@@ -307,7 +307,11 @@ final class RendererController {
             cmd["value"] = property.value.boolValue
         case .slider:
             cmd["value"] = property.value.doubleValue
-        case .combo, .textinput, .text, .group, .file, .unknown:
+        case .scenetexture, .file:
+            // 贴图 / 文件替换类：渲染器按 scenetexture 语义实时换图。
+            cmd["type"] = "scenetexture"
+            cmd["value"] = property.value.stringValue
+        case .combo, .textinput, .text, .group, .directory, .usershortcut, .unknown:
             cmd["value"] = property.value.stringValue
         }
         return cmd
@@ -324,6 +328,8 @@ final class RendererController {
                 obj[key] = prop.value.boolValue
             case .slider:
                 obj[key] = prop.value.doubleValue
+            case .scenetexture, .file:
+                obj[key] = ["type": "scenetexture", "value": prop.value.stringValue]
             default:
                 obj[key] = prop.value.stringValue
             }

@@ -74,10 +74,12 @@ enum WEPropertyValue: Codable, Equatable, Hashable {
 struct WEProjectPropertyOption: Codable, Equatable, Hashable {
     var label: String
     var value: String
+    var condition: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.label = (try? c.decode(String.self, forKey: .label)) ?? ""
+        self.condition = try? c.decode(String.self, forKey: .condition)
         if let s = try? c.decode(String.self, forKey: .value) {
             self.value = s
         } else if let i = try? c.decode(Int.self, forKey: .value) {
@@ -89,9 +91,14 @@ struct WEProjectPropertyOption: Codable, Equatable, Hashable {
         }
     }
 
-    init(label: String, value: String) {
+    init(label: String, value: String, condition: String? = nil) {
         self.label = label
         self.value = value
+        self.condition = condition
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label, value, condition
     }
 }
 
@@ -106,6 +113,9 @@ enum WEPropertyType: String {
     case text
     case group
     case file
+    case directory
+    case scenetexture
+    case usershortcut
     case unknown
 
     init(raw: String) {
@@ -122,6 +132,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     var max: Double?
     var step: Double?
     var fraction: Bool?
+    var mode: String?
 
     var text: String?
     var type: String
@@ -137,7 +148,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case condition, index, options, order, min, max, step, fraction, text, type, value
+        case condition, index, options, order, min, max, step, fraction, mode, text, type, value
     }
 
     init(from decoder: Decoder) throws {
@@ -150,6 +161,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
         self.max = try? c.decode(Double.self, forKey: .max)
         self.step = try? c.decode(Double.self, forKey: .step)
         self.fraction = try? c.decode(Bool.self, forKey: .fraction)
+        self.mode = try? c.decode(String.self, forKey: .mode)
         self.text = try? c.decode(String.self, forKey: .text)
         self.type = (try? c.decode(String.self, forKey: .type)) ?? "text"
         self.value = (try? c.decode(WEPropertyValue.self, forKey: .value)) ?? .string("")
@@ -169,17 +181,37 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 // `ui_editor_properties_opacity`），词表在 WE 主程序内部，工坊资源里没有。
 // 这里内置一份常用 key → 中文 的映射；未命中时不再原样显示 `ui_` 乱码，
 // 而是剥掉已知前缀、下划线转空格、单词首字母大写，回退成可读英文标签。
+// MARK: - Wallpaper Engine 文案本地化
+
+// Wallpaper Engine 的属性 / 分组 / 选项标签常写成本地化 key（如
+// `ui_editor_properties_opacity`）。这里加载官方词表 `ui_zh-chs.json`（随 app 打包，
+// 3000+ 条），把 key 解析成简体中文；命中不了的 `ui_` key 回退成可读文本，其余
+// （作者自定义文本 / HTML）原样返回。
 enum WELocalization {
+    // 官方词表，懒加载一次。
+    private static let table: [String: String] = {
+        guard let url = Bundle.main.url(forResource: "ui_zh-chs", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        var out: [String: String] = [:]
+        out.reserveCapacity(obj.count)
+        for (k, v) in obj {
+            if let s = v as? String { out[k] = s }
+        }
+        return out
+    }()
+
     static func resolve(_ raw: String) -> String {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty { return raw }
         // 非本地化 key（作者自定义文本、HTML 等）原样返回。
         guard key.hasPrefix("ui_") else { return raw }
-        if let mapped = map[key] { return mapped }
+        if let mapped = table[key] { return mapped }
         return humanize(key)
     }
 
-    // 已知前缀，按长到短匹配后剥离。
+    // 已知前缀，命中不了词表时剥离并转成可读文本。
     private static let prefixes: [String] = [
         "ui_editor_script_snippet_",
         "ui_editor_properties_",
@@ -198,120 +230,13 @@ enum WELocalization {
             s = String(s.dropFirst(p.count))
             break
         }
-        s = s.replacingOccurrences(of: "_", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        s = s.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
         if s.isEmpty { return key }
-        return s.split(separator: " ").map { word -> String in
-            guard let first = word.first else { return String(word) }
-            return first.uppercased() + word.dropFirst()
+        return s.split(separator: " ").map { w -> String in
+            guard let f = w.first else { return String(w) }
+            return f.uppercased() + w.dropFirst()
         }.joined(separator: " ")
     }
-
-    // 常用属性 / 分组 / 脚本片段标签的中文映射。覆盖 WE 内置词表里最常出现在
-    // 侧栏的项；其余走 humanize 回退。
-    private static let map: [String: String] = [
-        // 分类 / 通用
-        "ui_browse_properties_scheme_color": "配色方案",
-        "ui_browse_properties_audio_response": "音频响应",
-        "ui_browse_properties_volume": "音量",
-        "ui_browse_properties_playback_rate": "播放速度",
-        "ui_editor_properties_basic": "基础",
-        "ui_editor_properties_composite": "合成",
-        "ui_editor_properties_rendering": "渲染",
-        "ui_editor_properties_lighting": "光照",
-        "ui_editor_properties_material": "材质",
-        "ui_editor_properties_blending": "混合",
-        "ui_editor_properties_shading": "着色",
-        "ui_editor_properties_simulation": "模拟",
-        "ui_editor_properties_general": "常规",
-        // 常见标量 / 颜色属性
-        "ui_editor_properties_opacity": "不透明度",
-        "ui_editor_properties_alpha": "透明度",
-        "ui_editor_properties_color": "颜色",
-        "ui_editor_properties_background_color": "背景颜色",
-        "ui_editor_properties_background": "背景",
-        "ui_editor_properties_brightness": "亮度",
-        "ui_editor_properties_hdr_brightness": "HDR 亮度",
-        "ui_editor_properties_saturation": "饱和度",
-        "ui_editor_properties_hue": "色相",
-        "ui_editor_properties_contrast": "对比度",
-        "ui_editor_properties_tint_color": "着色颜色",
-        "ui_editor_properties_scale": "缩放",
-        "ui_editor_properties_size": "大小",
-        "ui_editor_properties_offset": "偏移",
-        "ui_editor_properties_position": "位置",
-        "ui_editor_properties_angle": "角度",
-        "ui_editor_properties_direction": "方向",
-        "ui_editor_properties_speed": "速度",
-        "ui_editor_properties_animation_speed": "动画速度",
-        "ui_editor_properties_scroll_speed": "滚动速度",
-        "ui_editor_properties_scroll_direction": "滚动方向",
-        "ui_editor_properties_strength": "强度",
-        "ui_editor_properties_intensity": "强度",
-        "ui_editor_properties_amount": "数量",
-        "ui_editor_properties_radius": "半径",
-        "ui_editor_properties_width": "宽度",
-        "ui_editor_properties_distance": "距离",
-        "ui_editor_properties_density": "密度",
-        "ui_editor_properties_frequency_min": "最小频率",
-        "ui_editor_properties_frequency_max": "最大频率",
-        "ui_editor_properties_noise": "噪声",
-        "ui_editor_properties_noise_amount": "噪声量",
-        "ui_editor_properties_noise_scale": "噪声缩放",
-        "ui_editor_properties_noise_speed": "噪声速度",
-        "ui_editor_properties_glow": "辉光",
-        "ui_editor_properties_blur": "模糊",
-        "ui_editor_properties_reflection": "反射",
-        "ui_editor_properties_reflectivity": "反射率",
-        "ui_editor_properties_refract": "折射",
-        "ui_editor_properties_refract_amount": "折射量",
-        "ui_editor_properties_distortion": "扭曲",
-        "ui_editor_properties_perspective": "透视",
-        "ui_editor_properties_mask": "遮罩",
-        "ui_editor_properties_gradient": "渐变",
-        "ui_editor_properties_gradient_map": "渐变映射",
-        "ui_editor_properties_invert": "反相",
-        "ui_editor_properties_greyscale": "灰度",
-        "ui_editor_properties_monochrome": "单色",
-        "ui_editor_properties_threshold": "阈值",
-        "ui_editor_properties_smoothness": "平滑度",
-        "ui_editor_properties_roughness": "粗糙度",
-        "ui_editor_properties_metallic": "金属度",
-        "ui_editor_properties_specular": "高光",
-        "ui_editor_properties_normal_map": "法线贴图",
-        "ui_editor_properties_depth": "深度",
-        "ui_editor_properties_depth_map": "深度贴图",
-        "ui_editor_properties_shape": "形状",
-        "ui_editor_properties_style": "样式",
-        "ui_editor_properties_mode": "模式",
-        "ui_editor_properties_blend_mode": "混合模式",
-        "ui_editor_properties_quality": "质量",
-        "ui_editor_properties_repeat": "重复",
-        "ui_editor_properties_phase": "相位",
-        "ui_editor_properties_power": "强度",
-        "ui_editor_properties_exponent": "指数",
-        "ui_editor_properties_feather": "羽化",
-        "ui_editor_properties_pattern": "图案",
-        "ui_editor_properties_audio_response": "音频响应",
-        "ui_editor_properties_audio_amount": "音频响应量",
-        "ui_editor_properties_audio_bounds": "音频范围",
-        "ui_editor_properties_audio_exponent": "音频指数",
-        "ui_editor_properties_interactive": "交互",
-        "ui_editor_properties_cursor_influence": "光标影响",
-        "ui_editor_properties_time_offset": "时间偏移",
-        "ui_editor_properties_timescale": "时间缩放",
-        "ui_editor_properties_gravity": "重力",
-        "ui_editor_properties_friction": "摩擦力",
-        "ui_editor_properties_force": "力",
-        // 时钟 / 日期文本预设
-        "ui_editor_properties_use_24h_format": "使用 24 小时制",
-        "ui_editor_properties_show_seconds": "显示秒",
-        "ui_editor_properties_delimiter": "分隔符",
-        "ui_editor_properties_date": "日期",
-        // 脚本片段
-        "ui_editor_script_snippet_drag_drop": "拖放",
-        "ui_editor_script_snippet_screen_bounce": "屏幕弹跳",
-    ]
 }
 
 // MARK: - 属性容器
