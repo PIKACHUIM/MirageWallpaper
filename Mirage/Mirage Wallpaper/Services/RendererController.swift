@@ -307,7 +307,7 @@ final class RendererController {
             cmd["value"] = property.value.boolValue
         case .slider:
             cmd["value"] = property.value.doubleValue
-        case .combo, .textinput, .text, .file, .unknown:
+        case .combo, .textinput, .text, .group, .file, .unknown:
             cmd["value"] = property.value.stringValue
         }
         return cmd
