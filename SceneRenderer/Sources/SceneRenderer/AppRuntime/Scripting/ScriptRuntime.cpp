@@ -382,6 +382,19 @@ struct EngineHostState {
         std::function<void(double)>           set_point_size;
     };
     std::unordered_map<sr::SceneNode*, TextAlignHooks> text_align_hooks;
+    // SceneNode -> text-layer origin getter/setter. Text compose nodes derive
+    // their world translate from a logical `origin` plus alignment offsets, and
+    // rebuild that translate every frame when dynamic text re-lays out. A naked
+    // SetTranslate from a drag script (`thisLayer.origin = ...`) is therefore
+    // overwritten next frame. Routing origin writes through the parser's
+    // apply_text_origin (which updates the logical origin and re-anchors) keeps
+    // drag and per-frame text layout consistent. Missing entry → non-text node,
+    // NodeGet/SetOrigin fall back to the raw Translate path.
+    struct TextOriginHooks {
+        std::function<Eigen::Vector3f()>            get_origin;
+        std::function<void(const Eigen::Vector3f&)> set_origin;
+    };
+    std::unordered_map<sr::SceneNode*, TextOriginHooks> text_origin_hooks;
     JsRuntime::BoneIndexResolver                        bone_index_resolver;
     JsRuntime::BoneTransformResolver                    bone_transform_resolver;
     sr::SceneNode*                                     scene_root { nullptr };
@@ -792,10 +805,10 @@ void InstallLocalStorage(JSContext* ctx) {
     JS_FreeValue(ctx, g);
 }
 
-// Project normalised canvas coordinates into scene world units. Both the
-// pointer Y and scene layer origins are top-down, so no Y flip: the result
-// must match SceneNode::ModelTrans / thisLayer.origin space, which drives
-// HitTestNode and the worldPosition scripts assign back to a layer's origin.
+// Project normalised canvas coordinates into the scene's world units.
+// Platform cursor coordinates are top-down, while Wallpaper Engine scene
+// coordinates are Y-up. This is the same conversion used by
+// open-wallpaper-engine before SceneScript hit testing and event dispatch.
 struct CursorWorld {
     double x { 0 }, y { 0 };
 };
@@ -803,7 +816,7 @@ struct CursorWorld {
 CursorWorld CursorToWorld(const FrameInputs& fi) {
     return CursorWorld {
         .x = double(fi.cursor_x) * double(fi.canvas_w),
-        .y = double(fi.cursor_y) * double(fi.canvas_h),
+        .y = (1.0 - double(fi.cursor_y)) * double(fi.canvas_h),
     };
 }
 
@@ -1703,6 +1716,16 @@ inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double
 JSValue NodeGetOrigin(JSContext* ctx, JSValueConst this_val) {
     auto* n = GetLayerNode(this_val);
     if (! n) return MakeVec3(ctx, 0, 0, 0);
+    // Text compose nodes expose a logical origin distinct from their derived
+    // world translate (which folds in alignment offsets and is rebuilt each
+    // frame). Return the logical origin so read-modify-write drag math stays
+    // in the same space the setter writes.
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (auto it = host->text_origin_hooks.find(n);
+        it != host->text_origin_hooks.end() && it->second.get_origin) {
+        auto v = it->second.get_origin();
+        return MakeVec3(ctx, v.x(), v.y(), v.z());
+    }
     auto v = n->Translate();
     return MakeVec3(ctx, v.x(), v.y(), v.z());
 }
@@ -1711,6 +1734,15 @@ JSValue NodeSetOrigin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     if (! n) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
     if (! ReadXYZ(ctx, val, x, y, z)) return JS_UNDEFINED;
+    // Route through the text-origin hook when present so a script drag updates
+    // the layer's logical origin (and re-anchors), instead of writing a raw
+    // translate the per-frame text layout would immediately overwrite.
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (auto it = host->text_origin_hooks.find(n);
+        it != host->text_origin_hooks.end() && it->second.set_origin) {
+        it->second.set_origin(Eigen::Vector3f { float(x), float(y), float(z) });
+        return JS_UNDEFINED;
+    }
     n->SetTranslate({ float(x), float(y), float(z) });
     return JS_UNDEFINED;
 }
@@ -2730,6 +2762,16 @@ void JsRuntime::RegisterTextSetter(sr::SceneNode*                       node,
                                    std::function<void(std::string_view)> setter) {
     if (node == nullptr) return;
     m_impl->host.text_setters[node] = std::move(setter);
+}
+
+void JsRuntime::RegisterTextOriginHooks(sr::SceneNode*                              node,
+                                        std::function<Eigen::Vector3f()>            get_origin,
+                                        std::function<void(const Eigen::Vector3f&)> set_origin) {
+    if (node == nullptr) return;
+    m_impl->host.text_origin_hooks[node] = EngineHostState::TextOriginHooks {
+        .get_origin = std::move(get_origin),
+        .set_origin = std::move(set_origin),
+    };
 }
 
 void JsRuntime::RegisterTextAlignSetters(sr::SceneNode* node, std::string horizontal,

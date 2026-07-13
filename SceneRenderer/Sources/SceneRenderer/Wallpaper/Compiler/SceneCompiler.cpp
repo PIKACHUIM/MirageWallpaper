@@ -4219,6 +4219,12 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         anchor_state->origin = *next;
         apply_text_anchor();
     };
+    // Same effect as apply_text_origin but from a concrete Vec3, for the
+    // scripting origin setter hook (thisLayer.origin = ...).
+    auto apply_text_origin_vec = [anchor_state, apply_text_anchor](const Vector3f& next) {
+        anchor_state->origin = next;
+        apply_text_anchor();
+    };
     auto apply_text_scale = [compose_hold, apply_text_anchor](const script::ScriptValue& value) {
         auto*    compose_ptr = compose_hold.get();
         Vector3f current     = compose_ptr->Scale();
@@ -4281,6 +4287,13 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             return *current_point_size;
         },
         set_pointsize);
+    // Route `thisLayer.origin` reads/writes (e.g. drag scripts on the origin
+    // field) through the logical text origin + re-anchor, so they survive the
+    // per-frame compose rebuild that reapplies apply_text_anchor's translate.
+    context.script_scene->runtime().RegisterTextOriginHooks(
+        compose_node.as_ptr(),
+        [anchor_state]() -> Vector3f { return anchor_state->origin; },
+        apply_text_origin_vec);
     // Transform-style script bindings (origin/scale/angles) animate the
     // composite quad in world space, not the layer-space glyph node.
     AssignNodeFieldAnimations(*compose_node.as_ptr(), obj.field_bindings);

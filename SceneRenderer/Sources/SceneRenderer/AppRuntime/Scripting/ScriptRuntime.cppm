@@ -1,6 +1,7 @@
 module;
 
 export module sr.script;
+import eigen;
 import nlohmann.json;
 import sr.core;
 import rstd;
@@ -189,6 +190,14 @@ public:
     // text writes from scripts bound to non-text fields (e.g. clock
     // scripts attached to `visible`).
     void RegisterTextSetter(sr::SceneNode* node, std::function<void(std::string_view)> setter);
+    // Text compose nodes derive their world translate from a logical origin
+    // plus alignment offsets, rebuilt every frame on dynamic text relayout.
+    // Registering these lets `thisLayer.origin` reads/writes (e.g. drag
+    // scripts) go through that logical origin instead of a raw translate that
+    // the relayout would overwrite.
+    void RegisterTextOriginHooks(sr::SceneNode*                              node,
+                                 std::function<Eigen::Vector3f()>            get_origin,
+                                 std::function<void(const Eigen::Vector3f&)> set_origin);
     void RegisterTextAlignSetters(sr::SceneNode* node, std::string horizontal,
                                   std::string vertical, double point_size,
                                   std::function<void(std::string_view)> set_horizontal,
