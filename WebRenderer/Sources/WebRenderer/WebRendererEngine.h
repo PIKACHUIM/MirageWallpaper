@@ -42,8 +42,8 @@ typedef struct {
 - (void)applyUserProperty:(NSString *)key value:(id)value;
 - (void)applyAllUserProperties;
 
-// Sets window.wallpaperEngine_paused + calls wallpaperPropertyListener.setPaused
-// (WE's contract; OWE only called CEF WasHidden). Pauses registered audio streams.
+// Freezes page animation clocks, timers, CSS animations and playing media, then
+// calls wallpaperPropertyListener.setPaused (the Wallpaper Engine contract).
 - (void)setPaused:(BOOL)paused;
 
 // Master volume: applies the "audio" property + mutes/unmutes registered streams.

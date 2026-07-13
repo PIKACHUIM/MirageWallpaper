@@ -60,20 +60,74 @@ static NSString *const kShimJS = @"\
   window.__wr_pushAudio = function(arr){\
     for (var i=0;i<__listeners.length;i++){ try { __listeners[i](arr); } catch(e){} }\
   };\
-  /* Capture native rAF before the page can override it; wrap it when fps<60. */\
-  window.__wr_nativeRaf = (window.requestAnimationFrame || function(cb){return setTimeout(function(){cb(performance.now());},16);}).bind(window);\
-  window.__wr_setFps = function(fps){\
-    if (!isFinite(fps) || fps <= 0 || fps >= 60) { window.requestAnimationFrame = window.__wr_nativeRaf; return; }\
-    var interval = 1000 / fps, last = 0;\
-    window.requestAnimationFrame = function(cb){\
-      var now = performance.now();\
-      if (interval - (now - last) <= 0) { last = now; return window.__wr_nativeRaf(function(t){ cb(t); }); }\
-      return window.__wr_nativeRaf(function(t){\
-        if (performance.now() - last >= interval) { last = performance.now(); cb(t); }\
-        else { window.requestAnimationFrame(cb); }\
-      });\
-    };\
+  /* A real host pause must stop page-owned clocks as well as WE callbacks.\
+     Keep a single rAF wrapper installed: replacing it for fps throttling used\
+     to silently remove pause support. */\
+  var __paused=false, __fps=0, __rafSerial=1, __rafPending={}, __rafNative={}, __rafDelay={};\
+  var __nativeRaf=(window.requestAnimationFrame||function(cb){return setTimeout(function(){cb(performance.now());},16);}).bind(window);\
+  var __nativeCancel=(window.cancelAnimationFrame||clearTimeout).bind(window);\
+  var __nativeSetTimeout=window.setTimeout.bind(window), __nativeClearTimeout=window.clearTimeout.bind(window);\
+  function __runRaf(id, cb, stamp){\
+    if (!__rafPending[id]) return;\
+    if (__paused) { __rafNative[id]=0; __rafDelay[id]=0; return; }\
+    if (__fps>0&&__fps<60) window.__wr_lastRaf=performance.now();\
+    delete __rafPending[id]; delete __rafNative[id]; cb(stamp);\
+  }\
+  function __scheduleRaf(id){\
+    var cb=__rafPending[id]; if (!cb||__paused) return;\
+    var interval=__fps>0&&__fps<60?1000/__fps:0;\
+    if (interval) {\
+      var now=performance.now(), wait=window.__wr_lastRaf?Math.max(0,interval-(now-window.__wr_lastRaf)):0;\
+      __rafDelay[id]=__nativeSetTimeout(function(){\
+        delete __rafDelay[id]; __runRaf(id,cb,performance.now());\
+      },wait);\
+    } else {\
+      __rafNative[id]=__nativeRaf(function(t){__runRaf(id,cb,t);});\
+    }\
+  }\
+  window.requestAnimationFrame=function(cb){\
+    var id=__rafSerial++; __rafPending[id]=cb; __scheduleRaf(id); return id;\
   };\
+  window.cancelAnimationFrame=function(id){\
+    if (__rafNative[id]) __nativeCancel(__rafNative[id]);\
+    if (__rafDelay[id]) __nativeClearTimeout(__rafDelay[id]);\
+    delete __rafNative[id]; delete __rafDelay[id]; delete __rafPending[id];\
+  };\
+  window.__wr_setFps=function(fps){ __fps=(!isFinite(fps)||fps<=0||fps>=60)?0:fps; window.__wr_lastRaf=0; };\
+  var __timerSerial=1, __timers={};\
+  var __nativeSetInterval=window.setInterval.bind(window), __nativeClearInterval=window.clearInterval.bind(window);\
+  function __scheduleTimer(id){\
+    var t=__timers[id]; if (!t||__paused) return;\
+    t.due=Date.now()+t.remaining;\
+    t.native=__nativeSetTimeout(function(){\
+      var current=__timers[id]; if (!current) return; current.native=0;\
+      if (__paused) { current.remaining=Math.max(0,current.due-Date.now()); return; }\
+      if (!current.repeat) delete __timers[id];\
+      try { current.fn.apply(window,current.args); } catch(e){ setTimeout(function(){throw e;},0); }\
+      if (current.repeat&&__timers[id]) { current.remaining=current.delay; __scheduleTimer(id); }\
+    },t.remaining);\
+  }\
+  function __makeTimer(fn,delay,repeat,args){\
+    if (typeof fn!=='function') return repeat?__nativeSetInterval(fn,delay):__nativeSetTimeout(fn,delay);\
+    var id=__timerSerial++, ms=Math.max(0,Number(delay)||0);\
+    __timers[id]={fn:fn,args:args,delay:ms,remaining:ms,repeat:repeat,native:0,due:0}; __scheduleTimer(id); return id;\
+  }\
+  window.setTimeout=function(fn,delay){return __makeTimer(fn,delay,false,Array.prototype.slice.call(arguments,2));};\
+  window.setInterval=function(fn,delay){return __makeTimer(fn,delay,true,Array.prototype.slice.call(arguments,2));};\
+  window.clearTimeout=window.clearInterval=function(id){\
+    var t=__timers[id]; if (t) { if(t.native) __nativeClearTimeout(t.native); delete __timers[id]; return; } __nativeClearTimeout(id); __nativeClearInterval(id);\
+  };\
+  function __allMedia(){\
+    var a=__streams.slice(); try { var m=document.querySelectorAll('audio,video'); for(var i=0;i<m.length;i++) if(a.indexOf(m[i])<0)a.push(m[i]); }catch(e){} return a;\
+  }\
+  function __pauseMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];s.__wr_wasPlaying=!s.paused;if(s.__wr_wasPlaying)s.pause();}catch(e){} }\
+  function __resumeMedia(){ var a=__allMedia(); for(var i=0;i<a.length;i++)try{var s=a[i];if(s.__wr_wasPlaying){s.__wr_wasPlaying=false;var p=s.play();if(p&&p.catch)p.catch(function(){});}}catch(e){} }\
+  function __setCssPaused(p){\
+    var root=document.documentElement; if(!root)return;\
+    if(!document.getElementById('__wr_pause_style')){var style=document.createElement('style');style.id='__wr_pause_style';style.textContent='html.__wr-paused *,html.__wr-paused *::before,html.__wr-paused *::after{-webkit-animation-play-state:paused!important;animation-play-state:paused!important;}';(document.head||root).appendChild(style);}\
+    if(p)root.classList.add('__wr-paused');else root.classList.remove('__wr-paused');\
+  }\
+  window.__wr_pauseStreams=__pauseMedia; window.__wr_resumeStreams=__resumeMedia;\
   window.__wr_applyProps = function(props){\
     try {\
       if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.applyUserProperties === 'function')\
@@ -81,20 +135,34 @@ static NSString *const kShimJS = @"\
     } catch(e){ console.error('WebRenderer applyUserProperties:', e); }\
   };\
   window.__wr_setPaused = function(p){\
-    window.wallpaperEngine_paused = !!p;\
+    p=!!p; if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
+    __setCssPaused(p);\
+    if(p){\
+      Object.keys(__rafNative).forEach(function(id){if(__rafNative[id])__nativeCancel(__rafNative[id]);__rafNative[id]=0;});\
+      Object.keys(__rafDelay).forEach(function(id){if(__rafDelay[id])__nativeClearTimeout(__rafDelay[id]);__rafDelay[id]=0;});\
+      Object.keys(__timers).forEach(function(id){var t=__timers[id];if(t.native){__nativeClearTimeout(t.native);t.native=0;t.remaining=Math.max(0,t.due-Date.now());}});\
+      __pauseMedia();\
+    }else{\
+      Object.keys(__rafPending).forEach(function(id){__scheduleRaf(id);});\
+      Object.keys(__timers).forEach(function(id){__scheduleTimer(id);});\
+      __resumeMedia();\
+    }\
     try {\
       if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.setPaused === 'function')\
-        window.wallpaperPropertyListener.setPaused(!!p);\
+        window.wallpaperPropertyListener.setPaused(p);\
     } catch(e){ console.error('WebRenderer setPaused:', e); }\
   };\
   /* Synthetic mouse-event dispatch — used by WRDesktopInputForwarder to feed \
      the page real desktop clicks/moves (the wallpaper window sits below \
-     Finder's desktop window and never receives them directly). */\
-  window.__wr_dispatchMouse = function(type, x, y){\
+     Finder's desktop window and never receives them directly). \
+     4th arg `buttons` maps to MouseEvent.buttons (0=none, 1=left held). */\
+  window.__wr_dispatchMouse = function(type, x, y, buttons){\
     try {\
+      var btn = (type === 'mousedown' || type === 'mouseup' || type === 'click') ? 0 : -1;\
       var el = document.elementFromPoint(x, y) || document.body;\
       el.dispatchEvent(new MouseEvent(type, {\
-        bubbles: true, cancelable: true, view: window, clientX: x, clientY: y\
+        bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,\
+        button: (btn >= 0 ? btn : 0), buttons: (buttons || 0)\
       }));\
     } catch(e){ console.error('WebRenderer dispatchMouse:', e); }\
   };\
@@ -263,7 +331,6 @@ static NSString *const kDefaultUserAgent =
 
 - (void)setPaused:(BOOL)paused {
     [self eval:[NSString stringWithFormat:@"__wr_setPaused(%@);", paused ? @"true" : @"false"]];
-    [self eval:paused ? @"__wr_pauseStreams();" : @"__wr_resumeStreams();"];
 }
 
 - (void)setVolume:(float)volume {
