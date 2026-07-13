@@ -177,6 +177,11 @@ class WallpaperViewModel: ObservableObject {
     func reapplyCurrent() {
         let w = currentWallpaper
         guard w.isValid else { return }
+        runtime = loadRuntime(for: w)
+        suppressPlaybackSideEffects = true
+        playVolume = runtime.volume
+        playRate = runtime.speed
+        suppressPlaybackSideEffects = false
         renderer.render(w, on: 0, options: makeRenderOptions(for: w))
     }
 
@@ -258,13 +263,17 @@ class WallpaperViewModel: ObservableObject {
 
     private func syncStatusPauseItem(isPaused: Bool) {
         guard let menu = AppDelegate.shared.statusItem?.menu else { return }
-        for (i, item) in menu.items.enumerated() {
+        for item in menu.items {
             if isPaused, item.title == "暂停" {
-                menu.items[i] = .init(title: "继续", systemImage: "play.fill",
-                                      action: #selector(AppDelegate.resume), keyEquivalent: "")
+                item.title = "继续"
+                item.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: nil)
+                item.action = #selector(AppDelegate.resume)
+                item.target = AppDelegate.shared
             } else if !isPaused, item.title == "继续" {
-                menu.items[i] = .init(title: "暂停", systemImage: "pause.fill",
-                                      action: #selector(AppDelegate.pause), keyEquivalent: "")
+                item.title = "暂停"
+                item.image = NSImage(systemSymbolName: "pause.fill", accessibilityDescription: nil)
+                item.action = #selector(AppDelegate.pause)
+                item.target = AppDelegate.shared
             }
         }
     }
