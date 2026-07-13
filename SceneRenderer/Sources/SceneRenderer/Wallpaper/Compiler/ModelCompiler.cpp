@@ -2,7 +2,7 @@ module;
 #include <rstd/macro.hpp>
 
 module sr.pkg.parse;
-import nlohmann.json;
+import sr.json;
 import sr.spec_texs;
 import sr.core;
 import sr.types;
@@ -1005,12 +1005,13 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
 }
 
 std::optional<wpscene::Material> WPMdlParser::ParseMaterial(std::string_view ref, fs::VFS& vfs) {
-    nlohmann::json json;
-    const auto     path = ResolveMdlMaterialPath(ref);
-    if (! sr::ParseJson(fs::GetFileContent(vfs, path), json)) {
-        rstd_error("load mdl material '{}' failed", path);
+    const auto path   = ResolveMdlMaterialPath(ref);
+    auto       parsed = sr::ParseJson(fs::GetFileContent(vfs, path));
+    if (parsed.is_err()) {
+        rstd_error("load mdl material '{}' failed: {}", path, parsed.unwrap_err());
         return std::nullopt;
     }
+    auto json = parsed.unwrap();
 
     wpscene::Material material;
     material.blending   = "disabled";

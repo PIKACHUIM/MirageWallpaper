@@ -3,16 +3,16 @@
 # external C++ module facades.
 # ---------------------------------------------------------------------------
 add_library(SceneRendererCore STATIC)
-target_sources(SceneRendererCore PRIVATE Json.cpp)
+target_sources(SceneRendererCore PRIVATE Json.cpp UserProperty.cpp)
 target_sources(SceneRendererCore
   PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
          Core.cppm
          eigen.cppm
          Fs.cppm
-         nlohmann_json.cppm
-         Json.cppm)
+         Json.cppm
+         UserProperty.cppm)
 target_link_libraries(SceneRendererCore
-  PUBLIC rstd::rstd rstd.cppstd rstd.log Eigen3::Eigen nlohmann_json)
+  PUBLIC rstd::rstd rstd.cppstd rstd.json rstd.log Eigen3::Eigen)
 target_compile_features(SceneRendererCore PUBLIC cxx_std_20)
 target_compile_options(SceneRendererCore PRIVATE -Wno-missing-field-initializers)
 set_property(TARGET SceneRendererCore PROPERTY POSITION_INDEPENDENT_CODE ON)

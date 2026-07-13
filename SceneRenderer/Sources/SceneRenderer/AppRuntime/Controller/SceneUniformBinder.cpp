@@ -1,8 +1,6 @@
 module;
 
 #include <rstd/macro.hpp>
-#include <algorithm>
-#include <cmath>
 
 module sr.scene_uniform_updater;
 import eigen;

@@ -35,7 +35,7 @@ target_sources(SceneRendererBase
          ../Domain/Scene/Visibility.cppm
          ../Domain/Scene/World.cppm)
 target_link_libraries(SceneRendererBase
-  PUBLIC rstd::rstd rstd.cppstd Eigen3::Eigen wavsen::audio SceneRendererTypes nlohmann_json
+  PUBLIC rstd::rstd rstd.cppstd Eigen3::Eigen wavsen::audio SceneRendererTypes
   PRIVATE PkgConfig::LZ4
           ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
 target_include_directories(SceneRendererBase
@@ -60,7 +60,7 @@ target_sources(SceneRendererScript
   PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES BASE_DIRS .. FILES ../AppRuntime/Scripting/ScriptRuntime.cppm)
 target_link_libraries(SceneRendererScript
   PUBLIC  SceneRendererBase
-  PRIVATE qjs nlohmann_json)
+  PRIVATE qjs)
 target_include_directories(SceneRendererScript
   PUBLIC
     ..
@@ -125,7 +125,7 @@ target_sources(SceneRendererImporter
          ../AppRuntime/Text/TextRasterizer.cppm)
 target_link_libraries(SceneRendererImporter
   PUBLIC SceneRendererBase SceneRendererShaderCompiler SceneRendererScript
-  PRIVATE nlohmann_json PkgConfig::LZ4 Freetype::Freetype PkgConfig::FONTCONFIG)
+  PRIVATE PkgConfig::LZ4 Freetype::Freetype PkgConfig::FONTCONFIG)
 target_include_directories(SceneRendererImporter
   PUBLIC
     ..

@@ -1,11 +1,5 @@
-module;
-
-#include <atomic>
-#include <cmath>
-
 module sr.scene;
 import eigen;
-import nlohmann.json;
 import rstd;
 import rstd.cppstd;
 
@@ -969,7 +963,7 @@ bool Scene::CommitNodeVisibilityChanges() {
     return requires_graph_rebuild;
 }
 
-bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property) {
+bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
     bool matched_binding = false;
     for (auto* node : m_resource_index.Nodes()) {
@@ -1011,8 +1005,7 @@ bool Scene::SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool vi
     return true;
 }
 
-bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view      key,
-                                                   const nlohmann::json& property) {
+bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view key, const Json& property) {
     if (m_resource_index.Empty()) RebuildResourceIndex();
 
     bool                                  requires_graph_rebuild = false;
@@ -1037,7 +1030,7 @@ bool Scene::ApplyUserImageEffectVisibilityBindings(std::string_view      key,
     return requires_graph_rebuild;
 }
 
-bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const nlohmann::json& property) {
+bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const Json& property) {
     bool changed = false;
     for (auto& light : lights) {
         if (! light) continue;
@@ -1050,8 +1043,7 @@ bool Scene::ApplyUserLightVisibilityBindings(std::string_view key, const nlohman
     return changed;
 }
 
-bool Scene::ApplyUserCameraPathVisibilityBindings(std::string_view      key,
-                                                  const nlohmann::json& property) {
+bool Scene::ApplyUserCameraPathVisibilityBindings(std::string_view key, const Json& property) {
     auto it = camera_path_user_index.find(std::string(key));
     if (it == camera_path_user_index.end()) return false;
 

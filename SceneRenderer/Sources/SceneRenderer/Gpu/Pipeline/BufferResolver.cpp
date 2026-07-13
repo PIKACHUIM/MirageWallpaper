@@ -1,7 +1,3 @@
-module;
-
-#include <atomic>
-
 module sr.vulkan_render;
 import sr.core;
 import rstd.cppstd;

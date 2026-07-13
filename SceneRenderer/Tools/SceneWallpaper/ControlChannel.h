@@ -19,7 +19,7 @@
 // so calling them from this thread is safe. EOF on stdin (parent closed the
 // pipe / died) triggers the on_quit callback so the wallpaper exits cleanly.
 //
-// NOTE: JSON lives in the sr build as a C++20 module (`import nlohmann.json;`),
+// NOTE: JSON lives in the sr build as a C++20 module (`import sr.json;`),
 // not a header — so this header stays JSON-free and all parsing is in the .cpp.
 
 #pragma once

@@ -1,5 +1,3 @@
-module;
-
 export module sr.pkg.scene_obj:field_binding;
 import rstd.cppstd;
 import sr.json;
@@ -52,26 +50,28 @@ struct AnimOptions {
     bool         wraploop { false };
     // `smoothing` may be null/int/float in the corpus; kept as raw json
     // until a renderer consumer needs it.
-    nlohmann::json smoothing;
-    nlohmann::json children; // array of nested anim refs
-    nlohmann::json events;   // array of marker objects
-    nlohmann::json parent;   // object describing parent anim
+    sr::Json smoothing;
+    sr::Json children; // array of nested anim refs
+    sr::Json events;   // array of marker objects
+    sr::Json parent;   // object describing parent anim
 };
 
-struct AnimCurve {
+struct AnimCurve : rstd::DefaultInClass<AnimCurve, rstd::clone::Clone> {
     std::vector<AnimKeyframe> c0;
     std::vector<AnimKeyframe> c1; // empty for scalar fields
     std::vector<AnimKeyframe> c2;
     AnimOptions               options;
     bool                      relative { false }; // only on `origin`
+
+    auto clone() const -> AnimCurve;
 };
 
 // FromJson helpers (defined in FieldBinding.cpp).
-bool ParseAnimKeyframeTangent(const nlohmann::json&, AnimKeyframeTangent&);
-bool ParseAnimKeyframe(const nlohmann::json&, AnimKeyframe&);
-bool ParseAnimAxis(const nlohmann::json&, std::vector<AnimKeyframe>&);
-bool ParseAnimOptions(const nlohmann::json&, AnimOptions&);
-bool ParseAnimCurve(const nlohmann::json&, AnimCurve&);
+bool ParseAnimKeyframeTangent(const sr::Json&, AnimKeyframeTangent&);
+bool ParseAnimKeyframe(const sr::Json&, AnimKeyframe&);
+bool ParseAnimAxis(const sr::Json&, std::vector<AnimKeyframe>&);
+bool ParseAnimOptions(const sr::Json&, AnimOptions&);
+bool ParseAnimCurve(const sr::Json&, AnimCurve&);
 
 // One captured `{value, script, scriptproperties, user}` per-field
 // binding. `source` is the inline JS module text observed in scene.json's
@@ -81,25 +81,25 @@ bool ParseAnimCurve(const nlohmann::json&, AnimCurve&);
 // `value` field, fed to `init(value)` by the runtime. `user` carries the
 // optional user-property name from `{user, value}` companion bindings.
 struct ScriptBinding {
-    std::string    source;
-    nlohmann::json properties;
-    nlohmann::json initial_value;
-    std::string    user;
+    std::string source;
+    sr::Json   properties;
+    sr::Json   initial_value;
+    std::string user;
 };
 
 // Side-channel container attached to every parseable object kind. Only
 // fields that actually carry a binding contribute entries — empty maps
 // for the common case where every field is a plain literal.
 struct FieldBindings {
-    std::unordered_map<std::string, AnimCurve>      animations;
-    std::unordered_map<std::string, nlohmann::json> scriptproperties;
-    std::unordered_map<std::string, ScriptBinding>  scripts;
+    std::unordered_map<std::string, AnimCurve>     animations;
+    rstd::json::Map                                scriptproperties;
+    std::unordered_map<std::string, ScriptBinding> scripts;
 };
 
 // Walks every direct child of `obj_json` and, when the child is an
 // object containing `animation` and/or `scriptproperties`, captures into
 // `out`. Idempotent: re-running on the same json overwrites prior
 // entries. Returns the count of bindings absorbed.
-std::size_t AbsorbAllFieldBindings(const nlohmann::json& obj_json, FieldBindings& out);
+std::size_t AbsorbAllFieldBindings(const sr::Json& obj_json, FieldBindings& out);
 
 } // namespace sr::wpscene

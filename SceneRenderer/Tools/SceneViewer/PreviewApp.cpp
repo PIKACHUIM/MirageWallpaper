@@ -8,9 +8,9 @@
 import rstd.cppstd;
 import rstd.log;
 import sr.scene_wallpaper;
+import sr.json;
 import sr.utils;
 import viewer.common;
-import nlohmann.json;
 
 using namespace std;
 
@@ -384,17 +384,22 @@ int main(int argc, char** argv) {
         }
         std::stringstream ss;
         ss << is.rdbuf();
-        auto parsed = nlohmann::json::parse(ss.str(),
-                                            /*cb*/ nullptr,
-                                            /*allow_ex*/ false,
-                                            /*ignore_comments*/ true);
-        if (! parsed.is_object()) {
+        auto parsed = sr::ParseJson(ss.str(), { .allow_comments = true });
+        if (parsed.is_err()) {
             std::cerr << "--user-properties: '" << up_path << "' is not a JSON object\n";
             return 1;
         }
-        for (auto it = parsed.begin(); it != parsed.end(); ++it) {
-            config.user_properties.emplace(it.key(), it.value());
+        auto value = parsed.unwrap();
+        if (! value.is_object()) {
+            std::cerr << "--user-properties: '" << up_path << "' is not a JSON object\n";
+            return 1;
         }
+        auto object = value.as_object();
+        (*object)->iter().for_each([&](auto entry) {
+            auto [key, property] = entry;
+            config.user_properties.insert(
+                ::alloc::string::String::make(key->as_str()), property->clone());
+        });
     }
 
     psw->configure(std::move(config));

@@ -1,6 +1,5 @@
 module;
 
-#include <cstdint>
 #include <rstd/macro.hpp>
 
 export module sr.vulkan_render:resource;

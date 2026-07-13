@@ -2,12 +2,12 @@ module;
 
 export module sr.pkg.parse:scene_stages;
 import eigen;
-import nlohmann.json;
 
 import rstd;
 import rstd.cppstd;
 import wavsen.audio;
 import sr.core;
+import sr.json;
 import sr.fs;
 import sr.scene;
 import sr.script;
@@ -33,12 +33,12 @@ struct PuppetLayerRegistry {
 // finalized by FinalizeScene. Holding it as a public struct lets the
 // CLI test driver run any subset of the pipeline.
 struct ParseContext {
-    std::shared_ptr<Scene>                                 scene;
-    SceneUniformUpdater*                                   shader_updater { nullptr };
-    i32                                                    ortho_w { 0 };
-    i32                                                    ortho_h { 0 };
-    fs::VFS*                                               vfs { nullptr };
-    const std::unordered_map<std::string, nlohmann::json>* user_properties { nullptr };
+    std::shared_ptr<Scene>                   scene;
+    SceneUniformUpdater*                     shader_updater { nullptr };
+    i32                                      ortho_w { 0 };
+    i32                                      ortho_h { 0 };
+    fs::VFS*                                 vfs { nullptr };
+    rstd::Option<rstd::ref<rstd::json::Map>> user_properties;
 
     ShaderValueMap                           global_base_uniforms;
     rstd::Option<rstd::sync::Arc<SceneNode>> effect_camera_node;
@@ -120,17 +120,19 @@ struct ProcessOpts {
 // host's current bool, so layers toggled off in the UI are pruned at
 // parse time.
 std::vector<SceneObjectVar>
-ExpandObjects(const nlohmann::json&, fs::VFS&, wpscene::SceneVersion,
-              const std::unordered_map<std::string, nlohmann::json>* user_props        = nullptr,
-              const Set<std::int32_t>*                               linked_source_ids = nullptr);
+ExpandObjects(const Json&, fs::VFS&, wpscene::SceneVersion,
+              rstd::Option<rstd::ref<rstd::json::Map>> user_props        = rstd::None(),
+              const Set<std::int32_t>*                 linked_source_ids = nullptr);
 
-// If general.orthogonalprojection.auto_, replaces width/height with the
-// largest image object's size.
-void AdjustAutoOrthoProjection(wpscene::SceneMetadata&, std::span<const SceneObjectVar>);
+// Resolves the effective width/height without mutating the parsed metadata.
+std::array<i32, 2> ResolveOrthoProjectionExtent(const wpscene::SceneMetadata&,
+                                                std::span<const SceneObjectVar>);
 
 // Allocates Scene + cameras + base uniforms + the two default render
 // targets (SpecTex_Default, WE_MIP_MAPPED_FRAME_BUFFER).
-ParseContext BuildContext(fs::VFS&, std::string_view scene_id, wpscene::SceneMetadata&);
+ParseContext BuildContext(fs::VFS&, std::string_view scene_id, const wpscene::SceneMetadata&,
+                          std::array<i32, 2>                       ortho_extent,
+                          rstd::Option<rstd::ref<rstd::json::Map>> user_properties = rstd::None());
 
 // Per-object dispatch. Brackets glslang init/finalize around the visit
 // loop. opts.kinds masks which kinds run; default is all-kinds. Sound

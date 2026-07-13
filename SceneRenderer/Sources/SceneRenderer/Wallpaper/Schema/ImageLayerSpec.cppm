@@ -1,7 +1,3 @@
-module;
-
-#include <nlohmann/json.hpp>
-
 export module sr.pkg.scene_obj:image_object;
 import sr.core;
 import rstd.cppstd;
@@ -22,7 +18,7 @@ namespace wpscene
 
 class EffectCommand {
 public:
-    bool        FromJson(const nlohmann::json&);
+    bool        FromJson(const sr::Json&);
     std::string command;
     std::string target;
     std::string source;
@@ -32,7 +28,7 @@ public:
 
 class EffectFbo {
 public:
-    bool        FromJson(const nlohmann::json&);
+    bool        FromJson(const sr::Json&);
     std::string name;
     std::string format;
     uint32_t    scale { 1 };
@@ -45,7 +41,7 @@ public:
 // substitute it, but the parser needs to accept the shape.
 class ObjectInstance {
 public:
-    bool                                          FromJson(const nlohmann::json&);
+    bool                                          FromJson(const sr::Json&);
     bool                                          present { false };
     std::uint32_t                                 id { 0 };
     std::unordered_map<std::string, std::int32_t> combos;
@@ -53,26 +49,22 @@ public:
     // usertextures elements are polymorphic: bare property-name strings
     // (PKGV0022+) and `{name, type}` system bindings (PKGV0018+). Stored
     // as raw json so both shapes are preserved.
-    std::vector<nlohmann::json> usertextures;
+    rstd::json::Array usertextures;
 };
 
 class ImageEffect {
-private:
-    static const std::unordered_set<std::string> BLACKLISTED_WORKSHOP_EFFECTS;
-    bool                                         IsEffectBlacklisted(const std::string& filePath);
-
 public:
-    bool                  FromJson(const nlohmann::json&, fs::VFS& vfs);               // legacy
-    bool                  FromJson(const nlohmann::json&, fs::VFS& vfs, SceneVersion); // canonical
-    bool                  FromFileJson(const nlohmann::json&, fs::VFS& vfs);
-    int32_t               id;
-    std::string           name;
-    std::string           username; // PKGV0001+; per-instance label override
-    bool                  visible { true };
-    VisibleUserBinding    visible_user;
-    std::string           visible_user_key;
-    int32_t               version;
-    std::vector<Material> materials;
+    bool                       FromJson(const sr::Json&, fs::VFS& vfs);               // legacy
+    bool                       FromJson(const sr::Json&, fs::VFS& vfs, SceneVersion); // canonical
+    bool                       FromFileJson(const sr::Json&, fs::VFS& vfs);
+    int32_t                    id;
+    std::string                name;
+    std::string                username; // PKGV0001+; per-instance label override
+    bool                       visible { true };
+    VisibleUserBinding         visible_user;
+    std::string                visible_user_key;
+    int32_t                    version;
+    std::vector<Material>      materials;
     std::vector<MaterialPass>  passes;
     std::vector<EffectCommand> commands;
     std::vector<EffectFbo>     fbos;
@@ -83,8 +75,8 @@ public:
     struct Config {
         bool passthrough { false };
     };
-    bool                     FromJson(const nlohmann::json&, fs::VFS&);               // legacy
-    bool                     FromJson(const nlohmann::json&, fs::VFS&, SceneVersion); // canonical
+    bool                     FromJson(const sr::Json&, fs::VFS&);               // legacy
+    bool                     FromJson(const sr::Json&, fs::VFS&, SceneVersion); // canonical
     int32_t                  id { 0 };
     std::string              name;
     std::array<float, 3>     origin { 0.0f, 0.0f, 0.0f };
@@ -158,11 +150,6 @@ public:
 };
 
 std::optional<ImageAssetInfo> LoadImageAssetInfo(fs::VFS& vfs, std::string_view image);
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(EffectFbo, name, scale);
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ImageEffect, name, visible, passes, fbos, materials);
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ImageObject, name, origin, angles, scale, size, visible,
-                                   material, effects);
 
 } // namespace wpscene
 } // namespace sr

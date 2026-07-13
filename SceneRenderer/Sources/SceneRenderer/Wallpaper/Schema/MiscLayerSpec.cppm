@@ -1,5 +1,3 @@
-module;
-
 export module sr.pkg.scene_obj:misc_object;
 import rstd.cppstd;
 import sr.fs;
@@ -22,7 +20,7 @@ export namespace sr::wpscene
 // Text-overlay object (PKGV0005+). Discriminator: top-level `text` is
 // non-null. The `text` and `font` fields appear in two shapes — plain
 // string, or an object (e.g. `{"script": "..."}` for property-bound
-// text). Both are captured verbatim as nlohmann::json so future consumers
+// text). Both are captured verbatim as sr::Json so future consumers
 // can decode either path without re-parsing.
 struct TextObject {
     // Common positional/metadata (mirrors ImageObject prefix).
@@ -40,18 +38,18 @@ struct TextObject {
     std::uint32_t             parent { 0 };
     std::string               attachment;
     std::vector<std::int32_t> dependencies;
-    nlohmann::json            instance;
+    sr::Json                 instance;
     FieldBindings             field_bindings;
 
     // Text-specific.
-    nlohmann::json text; // string | {script: ...} | {value: ...}
-    nlohmann::json font; // string | {value: ...}
-    float          pointsize { 12.0f };
-    std::uint32_t  padding { 0 };
-    std::string    horizontalalign;
-    std::string    verticalalign;
-    std::string    anchor;
-    std::string    alignment { "center" };
+    sr::Json        text; // string | {script: ...} | {user: ..., value: ...}
+    sr::Json        font; // string | {value: ...}
+    float            pointsize { 12.0f };
+    std::uint32_t    padding { 0 };
+    std::string      horizontalalign;
+    std::string      verticalalign;
+    std::string      anchor;
+    std::string      alignment { "center" };
 
     // Text-flow controls (PKGV0018+).
     std::uint32_t maxrows { 0 };
@@ -91,10 +89,10 @@ struct TextObject {
     float                    backgroundbrightness { 1.0f };
     std::vector<ImageEffect> effects;
 
-    bool FromJson(const nlohmann::json& json, fs::VFS& vfs) {
+    bool FromJson(const sr::Json& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const nlohmann::json& json, fs::VFS& vfs, SceneVersion /*v*/) {
+    bool FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion /*v*/) {
         sr::GetJsonValue(json, "id", id, false);
         sr::GetJsonValue(json, "name", name, false);
         sr::GetJsonValue(json, "origin", origin, false);
@@ -109,10 +107,9 @@ struct TextObject {
         sr::GetJsonValue(json, "parent", parent, false);
         sr::GetJsonValue(json, "attachment", attachment, false);
         sr::GetJsonValue(json, "dependencies", dependencies, false);
-        if (json.contains("instance")) instance = json.at("instance");
-
-        if (json.contains("text")) text = json.at("text");
-        if (json.contains("font")) font = json.at("font");
+        if (auto value = json.get("instance"); value.is_some()) instance = (*value)->clone();
+        if (auto value = json.get("text"); value.is_some()) text = (*value)->clone();
+        if (auto value = json.get("font"); value.is_some()) font = (*value)->clone();
 
         sr::GetJsonValue(json, "pointsize", pointsize, false);
         ReadUserValueBinding(json, "text", text_user);
@@ -128,13 +125,11 @@ struct TextObject {
         sr::GetJsonValue(json, "verticalalign", verticalalign, false);
         sr::GetJsonValue(json, "anchor", anchor, false);
         sr::GetJsonValue(json, "alignment", alignment, false);
-
         sr::GetJsonValue(json, "maxrows", maxrows, false);
         sr::GetJsonValue(json, "maxwidth", maxwidth, false);
         sr::GetJsonValue(json, "limitrows", limitrows, false);
         sr::GetJsonValue(json, "limitwidth", limitwidth, false);
         sr::GetJsonValue(json, "limituseellipsis", limituseellipsis, false);
-
         sr::GetJsonValue(json, "color", color, false);
         sr::GetJsonValue(json, "alpha", alpha, false);
         sr::GetJsonValue(json, "brightness", brightness, false);
@@ -147,11 +142,14 @@ struct TextObject {
         sr::GetJsonValue(json, "ledsource", ledsource, false);
         sr::GetJsonValue(json, "backgroundcolor", backgroundcolor, false);
         sr::GetJsonValue(json, "backgroundbrightness", backgroundbrightness, false);
-        if (json.contains("effects")) {
-            for (const auto& jE : json.at("effects")) {
-                ImageEffect wpeff;
-                wpeff.FromJson(jE, vfs);
-                effects.push_back(std::move(wpeff));
+        if (auto effect_values = json.get("effects"); effect_values.is_some()) {
+            auto array = (*effect_values)->as_array();
+            if (array.is_some()) {
+                for (const auto& jE : **array) {
+                    ImageEffect wpeff;
+                    wpeff.FromJson(jE, vfs);
+                    effects.push_back(std::move(wpeff));
+                }
             }
         }
         AbsorbAllFieldBindings(json, field_bindings);
@@ -176,7 +174,7 @@ struct ModelObject {
     bool                      nointerpolation { false };
     std::uint32_t             parent { 0 };
     std::vector<std::int32_t> dependencies;
-    nlohmann::json            instance;
+    sr::Json                 instance;
     FieldBindings             field_bindings;
 
     std::string model;
@@ -187,10 +185,10 @@ struct ModelObject {
     VisibleUserBinding                         visible_user;
     std::string                                visible_user_key;
 
-    bool FromJson(const nlohmann::json& json, fs::VFS& vfs) {
+    bool FromJson(const sr::Json& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*v*/) {
+    bool FromJson(const sr::Json& json, fs::VFS&, SceneVersion /*v*/) {
         sr::GetJsonValue(json, "id", id, false);
         sr::GetJsonValue(json, "name", name, false);
         sr::GetJsonValue(json, "origin", origin, false);
@@ -204,7 +202,7 @@ struct ModelObject {
         sr::GetJsonValue(json, "nointerpolation", nointerpolation, false);
         sr::GetJsonValue(json, "parent", parent, false);
         sr::GetJsonValue(json, "dependencies", dependencies, false);
-        if (json.contains("instance")) instance = json.at("instance");
+        if (auto value = json.get("instance"); value.is_some()) instance = (*value)->clone();
 
         sr::GetJsonValue(json, "model", model, false);
         sr::GetJsonValue(json, "attachment", attachment, false);
@@ -232,7 +230,7 @@ struct CameraObject {
     bool                      nointerpolation { false };
     std::uint32_t             parent { 0 };
     std::vector<std::int32_t> dependencies;
-    nlohmann::json            instance;
+    sr::Json                 instance;
     FieldBindings             field_bindings;
 
     std::string camera; // camera name reference
@@ -246,10 +244,10 @@ struct CameraObject {
     VisibleUserBinding visible_user;
     std::string        visible_user_key;
 
-    bool FromJson(const nlohmann::json& json, fs::VFS& vfs) {
+    bool FromJson(const sr::Json& json, fs::VFS& vfs) {
         return FromJson(json, vfs, kSceneVersionUnknown);
     }
-    bool FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*v*/) {
+    bool FromJson(const sr::Json& json, fs::VFS&, SceneVersion /*v*/) {
         sr::GetJsonValue(json, "id", id, false);
         sr::GetJsonValue(json, "name", name, false);
         sr::GetJsonValue(json, "origin", origin, false);
@@ -263,7 +261,7 @@ struct CameraObject {
         sr::GetJsonValue(json, "nointerpolation", nointerpolation, false);
         sr::GetJsonValue(json, "parent", parent, false);
         sr::GetJsonValue(json, "dependencies", dependencies, false);
-        if (json.contains("instance")) instance = json.at("instance");
+        if (auto value = json.get("instance"); value.is_some()) instance = (*value)->clone();
 
         sr::GetJsonValue(json, "camera", camera, false);
         sr::GetJsonValue(json, "path", path, false);

@@ -1,7 +1,6 @@
 module;
 
 export module sr.pkg.scene_obj:light_object;
-import nlohmann.json;
 import rstd.cppstd;
 import sr.fs;
 
@@ -19,8 +18,8 @@ namespace wpscene
 
 class LightObject {
 public:
-    bool                 FromJson(const nlohmann::json&, fs::VFS&);               // legacy
-    bool                 FromJson(const nlohmann::json&, fs::VFS&, SceneVersion); // canonical
+    bool                 FromJson(const sr::Json&, fs::VFS&);               // legacy
+    bool                 FromJson(const sr::Json&, fs::VFS&, SceneVersion); // canonical
     int32_t              id { 0 };
     std::string          name;
     std::array<float, 3> origin { 0.0f, 0.0f, 0.0f };
@@ -42,7 +41,7 @@ public:
     bool                      nointerpolation { false };
     std::uint32_t             parent { 0 };
     std::vector<std::int32_t> dependencies;
-    nlohmann::json            instance;
+    sr::Json                 instance;
     FieldBindings             field_bindings;
 
     // Light-kind specifics.

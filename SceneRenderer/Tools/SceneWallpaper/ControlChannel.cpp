@@ -4,7 +4,8 @@
 #include <iostream>
 #include <string>
 
-import nlohmann.json;
+import sr.json;
+import rstd.cppstd;
 import sr.scene_wallpaper; // re-exports sr.types (FillMode)
 
 namespace mirage {
@@ -34,26 +35,39 @@ bool ParseFillMode(const std::string& s, sr::FillMode& out) {
 void SceneControlChannel::dispatchLine(const char* line) {
     if (line == nullptr) return;
 
-    auto msg = nlohmann::json::parse(line, /*cb*/ nullptr,
-                                     /*allow_exceptions*/ false,
-                                     /*ignore_comments*/ true);
-    if (! msg.is_object() || ! msg.contains("cmd") || ! msg.at("cmd").is_string()) return;
+    auto parsed = sr::ParseJson(line, { .allow_comments = true });
+    if (parsed.is_err()) return;
+    auto msg = parsed.unwrap();
+    if (! msg.is_object()) return;
+    auto command = msg.get("cmd");
+    if (command.is_none()) return;
+    auto command_text = (*command)->as_str();
+    if (command_text.is_none()) return;
 
-    const std::string cmd = msg.at("cmd").get<std::string>();
+    const std::string cmd = rstd::cppstd::to_string(*command_text);
 
     if (cmd == "setProperty") {
-        if (! msg.contains("key") || ! msg.at("key").is_string()) return;
-        const std::string key = msg.at("key").get<std::string>();
+        auto key_value = msg.get("key");
+        if (key_value.is_none()) return;
+        auto key_text = (*key_value)->as_str();
+        if (key_text.is_none()) return;
+        const std::string key = rstd::cppstd::to_string(*key_text);
 
         // Build the property descriptor the runtime expects. If an explicit
         // "type" is present (e.g. color), wrap {type,value}; otherwise pass the
         // raw value (bool/number/string) — CoerceUserPropertyValue infers it.
-        nlohmann::json prop;
-        if (msg.contains("type") && msg.at("type").is_string()) {
-            prop["type"] = msg.at("type");
-            prop["value"] = msg.contains("value") ? msg.at("value") : nlohmann::json(nullptr);
-        } else if (msg.contains("value")) {
-            prop = msg.at("value");
+        auto type = msg.get("type");
+        auto value = msg.get("value");
+        sr::Json prop = sr::Json::Null();
+        if (type.is_some() && (*type)->is_string()) {
+            auto object = rstd::json::Map::make();
+            object.insert(::alloc::string::String::make(rstd::cppstd::as_str("type")),
+                          (*type)->clone());
+            object.insert(::alloc::string::String::make(rstd::cppstd::as_str("value")),
+                          value.is_some() ? (*value)->clone() : sr::Json::Null());
+            prop = sr::Json::Object(rstd::move(object));
+        } else if (value.is_some()) {
+            prop = (*value)->clone();
         } else {
             return;
         }
@@ -63,27 +77,35 @@ void SceneControlChannel::dispatchLine(const char* line) {
     } else if (cmd == "resume" || cmd == "play") {
         m_wallpaper.play();
     } else if (cmd == "volume") {
-        if (msg.contains("value") && msg.at("value").is_number()) {
-            m_wallpaper.setVolume(msg.at("value").get<float>());
+        auto value = msg.get("value");
+        if (value.is_some() && (*value)->is_number()) {
+            auto number = (*value)->as_f64();
+            if (number.is_some()) m_wallpaper.setVolume(static_cast<float>(*number));
         }
     } else if (cmd == "muted") {
-        if (msg.contains("value") && msg.at("value").is_boolean()) {
-            m_wallpaper.setMuted(msg.at("value").get<bool>());
+        auto value = msg.get("value");
+        if (value.is_some() && (*value)->is_boolean()) {
+            m_wallpaper.setMuted(*(*value)->as_bool());
         }
     } else if (cmd == "fps") {
-        if (msg.contains("value") && msg.at("value").is_number()) {
-            m_wallpaper.setFps(msg.at("value").get<std::uint32_t>());
+        auto value = msg.get("value");
+        if (value.is_some() && (*value)->is_number()) {
+            auto number = (*value)->as_u64();
+            if (number.is_some()) m_wallpaper.setFps(static_cast<std::uint32_t>(*number));
         }
     } else if (cmd == "fillmode") {
-        if (msg.contains("value") && msg.at("value").is_string()) {
+        auto value = msg.get("value");
+        if (value.is_some() && (*value)->is_string()) {
             sr::FillMode mode {};
-            if (ParseFillMode(msg.at("value").get<std::string>(), mode)) {
+            if (ParseFillMode(rstd::cppstd::to_string(*(*value)->as_str()), mode)) {
                 m_wallpaper.setFillMode(mode);
             }
         }
     } else if (cmd == "speed") {
-        if (msg.contains("value") && msg.at("value").is_number()) {
-            m_wallpaper.setSpeed(msg.at("value").get<float>());
+        auto value = msg.get("value");
+        if (value.is_some() && (*value)->is_number()) {
+            auto number = (*value)->as_f64();
+            if (number.is_some()) m_wallpaper.setSpeed(static_cast<float>(*number));
         }
     } else if (cmd == "quit") {
         m_running.store(false);

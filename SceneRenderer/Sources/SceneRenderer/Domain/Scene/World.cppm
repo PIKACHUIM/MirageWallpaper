@@ -6,7 +6,7 @@ module;
 
 export module sr.scene;
 import eigen;
-import nlohmann.json;
+import sr.json;
 import rstd;
 import sr.core;
 import rstd.cppstd;
@@ -2494,12 +2494,12 @@ public:
     // Apply only the final state to render-graph membership after all scripts
     // have run; rebuilding for intermediate states is prohibitively costly.
     bool CommitNodeVisibilityChanges();
-    bool ApplyUserNodeVisibilityBindings(std::string_view key, const nlohmann::json& property);
+    bool ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property);
     bool ApplyUserImageEffectVisibilityBindings(std::string_view      key,
-                                                const nlohmann::json& property);
-    bool ApplyUserLightVisibilityBindings(std::string_view key, const nlohmann::json& property);
+                                                const Json& property);
+    bool ApplyUserLightVisibilityBindings(std::string_view key, const Json& property);
     bool ApplyUserCameraPathVisibilityBindings(std::string_view      key,
-                                               const nlohmann::json& property);
+                                               const Json& property);
 
     // Scene-tree root. After parse handoff to the render thread, the tree
     // shape under `sceneGraph` is immutable until Scene destruction (see the
@@ -2606,6 +2606,8 @@ public:
     uint32_t                  ResourceGeneration() const { return m_resource_generation; }
 
 private:
+    Map<std::string, std::vector<std::function<void(std::string_view)>>> m_text_user_index;
+
     void RebuildElidableLayerIds();
 
     uint32_t                                 m_resource_generation { 0 };

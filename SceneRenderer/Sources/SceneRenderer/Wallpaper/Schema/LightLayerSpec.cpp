@@ -1,15 +1,14 @@
 module;
 
 module sr.pkg.scene_obj;
-import nlohmann.json;
 
 using namespace sr::wpscene;
 
-bool LightObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
+bool LightObject::FromJson(const sr::Json& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
-bool LightObject::FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*v*/) {
+bool LightObject::FromJson(const sr::Json& json, fs::VFS&, SceneVersion /*v*/) {
     sr::GetJsonValue(json, "origin", origin);
     sr::GetJsonValue(json, "angles", angles);
     sr::GetJsonValue(json, "scale", scale);
@@ -23,12 +22,10 @@ bool LightObject::FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*
     sr::GetJsonValue(json, "id", id, false);
     sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false);
     sr::GetJsonValue(json, "shape", shape, false);
-
     sr::GetJsonValue(json, "locktransforms", locktransforms, false);
     sr::GetJsonValue(json, "muteineditor", muteineditor, false);
     sr::GetJsonValue(json, "nointerpolation", nointerpolation, false);
     sr::GetJsonValue(json, "parent", parent, false);
-
     sr::GetJsonValue(json, "ledsource", ledsource, false);
     sr::GetJsonValue(json, "castshadow", castshadow, false);
     sr::GetJsonValue(json, "castvolumetrics", castvolumetrics, false);
@@ -44,7 +41,7 @@ bool LightObject::FromJson(const nlohmann::json& json, fs::VFS&, SceneVersion /*
     sr::GetJsonValue(json, "cascadedistance1", cascadedistance1, false);
     sr::GetJsonValue(json, "cascadedistance2", cascadedistance2, false);
     sr::GetJsonValue(json, "dependencies", dependencies, false);
-    if (json.contains("instance")) instance = json.at("instance");
+    if (auto value = json.get("instance"); value.is_some()) instance = (*value)->clone();
     AbsorbAllFieldBindings(json, field_bindings);
     return true;
 }

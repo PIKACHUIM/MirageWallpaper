@@ -2,7 +2,7 @@ module;
 
 export module sr.script;
 import eigen;
-import nlohmann.json;
+import sr.json;
 import sr.core;
 import rstd;
 import rstd.cppstd;
@@ -112,13 +112,13 @@ struct PropDescriptor {
         Delimiter,
         Other
     };
-    Kind           kind { Kind::Other };
-    std::string    name;
-    std::string    label;
-    nlohmann::json default_value; // captured verbatim
-    double         min { 0.0 };
-    double         max { 1.0 };
-    bool           integer { false };
+    Kind        kind { Kind::Other };
+    std::string name;
+    std::string label;
+    Json        default_value; // captured verbatim
+    double      min { 0.0 };
+    double      max { 1.0 };
+    bool        integer { false };
 };
 
 // --- runtime ----------------------------------------------------------------
@@ -140,8 +140,8 @@ public:
     // stub (the JS-side default created at bootstrap).
     FieldScript* MakeFieldScript(
         std::string_view source, std::string_view script_sha, FieldKind field_kind,
-        const nlohmann::json& properties_config, const nlohmann::json& initial_value,
-        sr::SceneNode* node = nullptr, std::vector<sr::SceneNode*> clones = {},
+        const Json& properties_config, const Json& initial_value, sr::SceneNode* node = nullptr,
+        std::vector<sr::SceneNode*>                                  clones       = {},
         std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones = {});
 
     // Install the Scene root that backs `thisScene`. `thisScene.getLayer(name)`
@@ -161,7 +161,7 @@ public:
     // Patch one Wallpaper Engine user property into engine.userProperties.
     // `property` should be the descriptor object shape used by project.json
     // (`{value: ...}` plus optional metadata).
-    void SetUserProperty(std::string_view key, const nlohmann::json& property);
+    void SetUserProperty(std::string_view key, const Json& property);
 
     // Dispatch Wallpaper Engine media callbacks for the current media
     // snapshot. Call from the renderer owner thread.
@@ -289,7 +289,7 @@ void TickSceneScripts(sr::Scene& scene, const FrameInputs& fi);
 
 // Patch `engine.userProperties` on the ScriptScene attached to `scene`.
 // No-op when the scene has no script runtime.
-void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const nlohmann::json& property);
+void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const Json& property);
 
 void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status);
 

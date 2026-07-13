@@ -8,10 +8,13 @@ export import sr.pkg.puppet;
 export namespace sr::wpscene
 {
 
-inline void ReadPuppetAnimationLayers(const nlohmann::json&                       json,
+inline void ReadPuppetAnimationLayers(const sr::Json&                            json,
                                       std::vector<WPPuppetLayer::AnimationLayer>& out) {
-    if (! json.contains("animationlayers")) return;
-    for (const auto& jLayer : json.at("animationlayers")) {
+    auto layers = json.get("animationlayers");
+    if (layers.is_none()) return;
+    auto array = (*layers)->as_array();
+    if (array.is_none()) return;
+    for (const auto& jLayer : **array) {
         WPPuppetLayer::AnimationLayer layer;
         sr::GetJsonValue(jLayer, "animation", layer.id);
         sr::GetJsonValue(jLayer, "blend", layer.blend);

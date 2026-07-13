@@ -144,7 +144,7 @@ VkResult TransImgLayout(const vvk::Queue& queue, vvk::CommandBuffer& cmd,
 std::optional<vvk::DeviceMemory> AllocateMemory(const vvk::Device& device, vvk::PhysicalDevice gpu,
                                                 VkMemoryRequirements  reqs,
                                                 VkMemoryPropertyFlags property,
-                                                void*                 pNext = NULL) {
+                                                void*                 pNext = nullptr) {
     VkPhysicalDeviceMemoryProperties pros = gpu.GetMemoryProperties().memoryProperties;
     for (uint32_t i = 0; i < pros.memoryTypeCount; ++i) {
         if ((reqs.memoryTypeBits & (1 << i)) && (pros.memoryTypes[i].propertyFlags & property)) {

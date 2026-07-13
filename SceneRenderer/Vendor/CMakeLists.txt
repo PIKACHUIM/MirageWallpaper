@@ -6,13 +6,11 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # Every dependency is built in-tree via add_subdirectory(); this project
 # never fetches from the network.
 #   headers : stb_image.h, vk_mem_alloc.h, effolkronium/, vog/
-#   built   : rstd, wavsen, eigen, nlohmann_json, spirv_reflect,
+#   built   : rstd, wavsen, eigen, spirv_reflect,
 #             glslang, argparse, quickjs
 # ------------------------------------------------------------------
 
 # Cache vars consumed by the nested add_subdirectory() calls below.
-set(JSON_BuildTests         OFF CACHE INTERNAL "")
-set(JSON_Install            OFF CACHE INTERNAL "")
 set(SPIRV_REFLECT_STATIC_LIB  ON  CACHE INTERNAL "")
 set(SPIRV_REFLECT_EXECUTABLE  OFF CACHE INTERNAL "")
 set(SPIRV_REFLECT_BUILD_TESTS OFF CACHE INTERNAL "")
@@ -43,7 +41,6 @@ set(BUILD_TESTING           OFF CACHE INTERNAL "")
 
 add_subdirectory(rstd)
 add_subdirectory(wavsen)
-add_subdirectory(nlohmann_json)
 add_subdirectory(spirv_reflect)
 add_subdirectory(glslang)
 add_subdirectory(argparse)

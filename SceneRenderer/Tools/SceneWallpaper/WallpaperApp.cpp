@@ -15,7 +15,8 @@
 #include <thread>
 #include <vector>
 
-import nlohmann.json;
+import sr.json;
+import rstd.cppstd;
 import rstd.log;
 import sr.scene_wallpaper;
 import sr.utils;
@@ -200,17 +201,22 @@ bool LoadUserProperties(const std::string& path, sr::SceneWallpaperConfig& confi
     }
     std::stringstream ss;
     ss << is.rdbuf();
-    auto parsed = nlohmann::json::parse(ss.str(),
-                                        /*cb*/ nullptr,
-                                        /*allow_exceptions*/ false,
-                                        /*ignore_comments*/ true);
-    if (! parsed.is_object()) {
+    auto parsed = sr::ParseJson(ss.str(), { .allow_comments = true });
+    if (parsed.is_err()) {
         std::cerr << "--user-properties: '" << path << "' is not a JSON object\n";
         return false;
     }
-    for (auto it = parsed.begin(); it != parsed.end(); ++it) {
-        config.user_properties.emplace(it.key(), it.value());
+    auto value = parsed.unwrap();
+    if (! value.is_object()) {
+        std::cerr << "--user-properties: '" << path << "' is not a JSON object\n";
+        return false;
     }
+    auto object = value.as_object();
+    (*object)->iter().for_each([&](auto entry) {
+        auto [key, value] = entry;
+        config.user_properties.insert(
+            ::alloc::string::String::make(key->as_str()), value->clone());
+    });
     return true;
 }
 
