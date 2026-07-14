@@ -92,10 +92,15 @@ struct WorkshopView: View {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 440))], alignment: .leading, spacing: 12) {
                         ForEach(workshopViewModel.items) { item in
+                            let isDownloaded = SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
+                            let installed = item.isPreset && isDownloaded
+                                ? workshopViewModel.installedItem(workshopId: item.publishedFileId)
+                                : nil
                             WorkshopItemCard(
                                 item: item,
                                 isHovered: hoveredId == item.id,
-                                isDownloaded: SteamWebAPI.shared.isItemDownloaded(item.publishedFileId),
+                                isDownloaded: isDownloaded,
+                                presetNeedsDependency: installed?.needsPresetDependency == true,
                                 downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
                             )
                             .onHover { hovered in

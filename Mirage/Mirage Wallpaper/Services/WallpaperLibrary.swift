@@ -98,10 +98,8 @@ final class WallpaperLibrary {
         if isWorkshopDirectoryCustomized, fm.fileExists(atPath: defaultSteamWorkshopDirectory.path) {
             dirs.append(defaultSteamWorkshopDirectory)
         }
-        if SteamCMDManager.shared.steamCMDPath != nil {
-            for steamCMDContent in SteamCMDManager.shared.steamCMDContentDirectories where fm.fileExists(atPath: steamCMDContent.path) {
-                dirs.append(steamCMDContent)
-            }
+        for steamCMDContent in SteamCMDManager.shared.steamCMDContentDirectories where fm.fileExists(atPath: steamCMDContent.path) {
+            dirs.append(steamCMDContent)
         }
         return dirs
     }
@@ -121,6 +119,16 @@ final class WallpaperLibrary {
             }
         }
         return result
+    }
+
+    func workshopItemDirectory(for workshopId: String) -> URL? {
+        workshopItemDirectories(for: workshopId).first
+    }
+
+    func workshopItemDirectories(for workshopId: String) -> [URL] {
+        sourceDirectories
+            .map { $0.appending(path: workshopId) }
+            .filter { fm.fileExists(atPath: $0.appending(path: "project.json").path) }
     }
 
     func loadAll() -> [WEWallpaper] {

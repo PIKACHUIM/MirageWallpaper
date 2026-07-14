@@ -42,6 +42,7 @@ class WorkshopViewModel: ObservableObject {
 
     @Published var downloadQueue: [DownloadTask] = []
     @Published var downloadHistory: [DownloadTask] = []
+    @Published var presetDependencyPrompt: PresetDependencyPrompt?
 
     // MARK: - Sync State
     // MARK: - Steam service state
@@ -67,6 +68,7 @@ class WorkshopViewModel: ObservableObject {
     private var searchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
+    private var pendingPresetApplication: (presetID: String, dependencyID: String)?
 
     init() {
         searchDebounce = $searchText
@@ -242,14 +244,22 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Download
 
-    func downloadItem(_ item: WorkshopItem) {
-        guard !downloadQueue.contains(where: { $0.id == item.publishedFileId }) else { return }
+    func downloadItem(_ item: WorkshopItem, purpose: DownloadPurpose = .wallpaper) {
+        if let existing = downloadQueue.first(where: { $0.id == item.publishedFileId }) {
+            switch existing.state {
+            case .failed, .completed:
+                downloadQueue.removeAll { $0.id == item.publishedFileId }
+            case .queued, .starting, .downloading, .validating:
+                return
+            }
+        }
 
         let task = DownloadTask(
             workshopItem: item,
             state: .queued,
             startedAt: nil,
-            completedAt: nil
+            completedAt: nil,
+            purpose: purpose
         )
         downloadQueue.append(task)
         processDownloadQueue()
@@ -268,7 +278,7 @@ class WorkshopViewModel: ObservableObject {
 
     func retryDownload(_ task: DownloadTask) {
         downloadQueue.removeAll { $0.id == task.id }
-        downloadItem(task.workshopItem)
+        downloadItem(task.workshopItem, purpose: task.purpose)
     }
 
     func clearCompletedDownloads() {
@@ -284,7 +294,12 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {
-        if let wallpaper = installedWallpaper(workshopId: item.publishedFileId) {
+        let installed = installedItem(workshopId: item.publishedFileId)
+        if let wallpaper = installed, wallpaper.needsPresetDependency {
+            showCustomization = false
+            selectedItem = item
+            requestPresetDependency(for: wallpaper)
+        } else if let wallpaper = installed, wallpaper.isValid {
             AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
             showCustomization = true
             selectedItem = nil
@@ -295,6 +310,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     private func processDownloadQueue() {
+        guard steamSetupState == .ready else { return }
         let maxConcurrent = 1
         let currentActive = downloadQueue.filter {
             if case .downloading = $0.state { return true }
@@ -335,7 +351,7 @@ class WorkshopViewModel: ObservableObject {
                 self.downloadQueue[idx].completedAt = Date()
                 self.processDownloadQueue()
                 NotificationCenter.default.post(name: .workshopItemDownloaded, object: workshopId)
-                self.applyDownloadedWallpaper(workshopId: workshopId)
+                self.handleCompletedDownload(workshopId: workshopId)
             } else if case .failed = state {
                 self.steamServiceStatus.workshopDownload = .unavailable("最近一次下载失败")
                 if SteamCMDManager.shared.isLoggedIn {
@@ -390,26 +406,96 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Auto Apply
 
-    private func applyDownloadedWallpaper(workshopId: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, let wallpaper = self.installedWallpaper(workshopId: workshopId) else { return }
+    func openInstalledWallpaper(_ wallpaper: WEWallpaper) {
+        if wallpaper.needsPresetDependency {
+            requestPresetDependency(for: wallpaper)
+        } else if wallpaper.isValid {
             AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
-            self.showCustomization = true
-            self.selectedItem = nil
+            showCustomization = true
+            selectedItem = nil
         }
     }
 
-    private func installedWallpaper(workshopId: String) -> WEWallpaper? {
-        guard let directory = SteamCMDManager.shared.downloadedItemDirectory(workshopId: workshopId) else {
-            return nil
+    func installedItem(workshopId: String) -> WEWallpaper? {
+        let installed = WallpaperLibrary.shared.workshopItemDirectories(for: workshopId)
+            .map { WEWallpaper.load(from: $0) }
+        return installed.first(where: \.isValid)
+            ?? installed.first(where: \.isPreset)
+            ?? installed.first
+    }
+
+    func requestPresetDependency(for wallpaper: WEWallpaper) {
+        guard wallpaper.isPreset, let dependency = wallpaper.presetDependency else { return }
+        let dependencyID = dependency.rawValue
+
+        if WallpaperLibrary.shared.workshopItemDirectory(for: dependencyID) != nil {
+            let refreshed = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
+            if refreshed.isValid {
+                openInstalledWallpaper(refreshed)
+                return
+            }
         }
-        let wallpaper = WEWallpaper.load(from: directory)
-        guard wallpaper.isValid,
-              wallpaper.kind != .unsupported,
-              FileManager.default.fileExists(atPath: wallpaper.resolvedEntryURL.path) else {
-            return nil
+
+        let presetID = wallpaper.wallpaperDirectory.lastPathComponent
+        let presetTitle = wallpaper.project.title
+        Task { @MainActor in
+            let dependencyItem: WorkshopItem
+            do {
+                dependencyItem = try await SteamWebAPI.shared.getFileDetails(workshopIds: [dependencyID])
+                    .first(where: { $0.publishedFileId == dependencyID })
+                    ?? .dependencyPlaceholder(id: dependencyID)
+            } catch {
+                dependencyItem = .dependencyPlaceholder(id: dependencyID)
+            }
+            self.presetDependencyPrompt = PresetDependencyPrompt(
+                presetID: presetID,
+                presetTitle: presetTitle,
+                dependencyID: dependencyID,
+                dependencyItem: dependencyItem
+            )
         }
-        return wallpaper
+    }
+
+    func confirmPresetDependencyDownload(_ prompt: PresetDependencyPrompt) {
+        presetDependencyPrompt = nil
+        pendingPresetApplication = (prompt.presetID, prompt.dependencyID)
+
+        if let preset = installedItem(workshopId: prompt.presetID), preset.isValid {
+            pendingPresetApplication = nil
+            openInstalledWallpaper(preset)
+            return
+        }
+
+        downloadItem(prompt.dependencyItem, purpose: .presetDependency)
+        if steamSetupState != .ready {
+            AppDelegate.shared.openSteamSetup()
+        }
+    }
+
+    func dismissPresetDependencyPrompt() {
+        presetDependencyPrompt = nil
+    }
+
+    private func handleCompletedDownload(workshopId: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+
+            if let pending = self.pendingPresetApplication,
+               pending.dependencyID == workshopId,
+               let preset = self.installedItem(workshopId: pending.presetID),
+               preset.isValid {
+                self.pendingPresetApplication = nil
+                self.openInstalledWallpaper(preset)
+                return
+            }
+
+            guard let wallpaper = self.installedItem(workshopId: workshopId) else { return }
+            if wallpaper.needsPresetDependency {
+                self.requestPresetDependency(for: wallpaper)
+            } else if wallpaper.isValid {
+                self.openInstalledWallpaper(wallpaper)
+            }
+        }
     }
 }
 

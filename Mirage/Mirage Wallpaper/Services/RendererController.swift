@@ -166,7 +166,10 @@ final class RendererController {
             }
 
         case .web:
-            args += [wallpaper.wallpaperDirectory.path]
+            args += [wallpaper.renderDirectory.path]
+            for overlay in wallpaper.assetOverlayDirectories {
+                args += ["--asset-overlay", overlay.path]
+            }
             args += ["--fps", String(options.fps)]
             args += ["--volume", String(format: "%.3f", options.muted ? 0 : options.volume)]
             args += ["--screen", String(screenIndex)]
@@ -174,7 +177,7 @@ final class RendererController {
             args += ["--control-stdin"]
 
         case .video:
-            args += [wallpaper.wallpaperDirectory.path]
+            args += [wallpaper.renderDirectory.path]
             args += ["--screen", String(screenIndex)]
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--fill", options.fillMode.rawValue]

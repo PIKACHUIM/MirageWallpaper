@@ -82,7 +82,7 @@ class WallpaperViewModel: ObservableObject {
         if let json = UserDefaults.standard.data(forKey: "CurrentWallpaper"),
            let wallpaper = try? JSONDecoder().decode(WEWallpaper.self, from: json),
            FileManager.default.fileExists(atPath: wallpaper.wallpaperDirectory.path) {
-            currentWallpaper = wallpaper
+            currentWallpaper = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
         } else {
             currentWallpaper = WallpaperViewModel.invalidWallpaper
         }
@@ -152,7 +152,30 @@ class WallpaperViewModel: ObservableObject {
                 result[key] = prop
             }
         }
+        if w.kind == .scene, !w.assetOverlayDirectories.isEmpty {
+            for (key, var property) in result where property.propertyType == .file ||
+                property.propertyType == .scenetexture || property.propertyType == .directory {
+                let path = property.value.stringValue
+                guard !path.isEmpty, !(path as NSString).isAbsolutePath else { continue }
+                if let resolved = resolvedPresetAsset(path, in: w.assetOverlayDirectories) {
+                    property.value = .string(resolved.path)
+                    result[key] = property
+                }
+            }
+        }
         return result
+    }
+
+    private func resolvedPresetAsset(_ relativePath: String, in directories: [URL]) -> URL? {
+        for directory in directories {
+            let root = directory.standardizedFileURL.resolvingSymlinksInPath()
+            let candidate = root.appending(path: relativePath).standardizedFileURL.resolvingSymlinksInPath()
+            let isInside = candidate.path == root.path || candidate.path.hasPrefix(root.path + "/")
+            if isInside, FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private func makeRenderOptions(for w: WEWallpaper) -> RenderOptions {

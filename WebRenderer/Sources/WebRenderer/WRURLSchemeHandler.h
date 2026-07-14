@@ -23,6 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 // is registered on the WKWebViewConfiguration at init time, before the workshop
 // directory is known, so this is updated in openWallpaper.
 @property (nonatomic, copy) NSString *baseDirectory;
+@property (nonatomic, copy) NSArray<NSString *> *overlayDirectories;
 
 - (instancetype)init;
 - (instancetype)initWithBaseDirectory:(NSString *)baseDirectory;

@@ -29,6 +29,14 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
         WallpaperKind(rawType: wallpaperType)
     }
 
+    var isPreset: Bool {
+        tags.contains { $0.caseInsensitiveCompare("Preset") == .orderedSame }
+    }
+
+    var displayTypeName: String {
+        isPreset ? "预设 · \(kind.displayName)" : kind.displayName
+    }
+
     var formattedFileSize: String {
         ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
     }
@@ -75,6 +83,24 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
         creatorSteamId: "",
         wallpaperType: "scene"
     )
+
+    static func dependencyPlaceholder(id: String) -> WorkshopItem {
+        WorkshopItem(
+            publishedFileId: id,
+            title: "基础壁纸 \(id)",
+            itemDescription: "",
+            previewImageURL: nil,
+            tags: [],
+            subscriptions: 0,
+            favorited: 0,
+            views: 0,
+            fileSize: 0,
+            timeCreated: .distantPast,
+            timeUpdated: .distantPast,
+            creatorSteamId: "",
+            wallpaperType: "scene"
+        )
+    }
 }
 
 // MARK: - Sort Order
@@ -202,6 +228,7 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
     case scene = "scene"
     case web = "web"
     case video = "video"
+    case preset = "preset"
 
     var id: String { rawValue }
 
@@ -211,6 +238,7 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
         case .scene: return "场景"
         case .web: return "网页"
         case .video: return "视频"
+        case .preset: return "预设"
         }
     }
 }
@@ -223,9 +251,29 @@ struct DownloadTask: Identifiable, Equatable {
     var state: DownloadState
     var startedAt: Date?
     var completedAt: Date?
+    var purpose: DownloadPurpose
 
     static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
         lhs.id == rhs.id && lhs.state == rhs.state
+    }
+}
+
+enum DownloadPurpose: Equatable {
+    case wallpaper
+    case presetDependency
+}
+
+struct PresetDependencyPrompt: Identifiable {
+    let presetID: String
+    let presetTitle: String
+    let dependencyID: String
+    let dependencyItem: WorkshopItem
+
+    var id: String { "\(presetID):\(dependencyID)" }
+
+    var message: String {
+        let size = dependencyItem.fileSize > 0 ? "（\(dependencyItem.formattedFileSize)）" : ""
+        return "预设“\(presetTitle)”需要基础壁纸“\(dependencyItem.title)”\(size)才能使用。是否一起下载？"
     }
 }
 

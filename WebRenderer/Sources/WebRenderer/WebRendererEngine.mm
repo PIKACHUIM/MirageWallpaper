@@ -221,6 +221,7 @@ static NSString *const kDefaultUserAgent =
     c.initialVolume = 1.0f;
     c.frameRate = 60;
     c.userAgent = nil;
+    c.assetOverlayDirectories = nil;
     return c;
 }
 
@@ -273,6 +274,7 @@ static NSString *const kDefaultUserAgent =
     [_pendingJS removeAllObjects];
 
     _schemeHandler.baseDirectory = manifest.workshopDir;
+    _schemeHandler.overlayDirectories = _config.assetOverlayDirectories ?: @[];
     NSString *entry = manifest.entryHTML ?: @"index.html";
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"we-wallpaper://wallpaper/%@", entry]];
     fprintf(stderr, "WebRenderer: loading %s\n", entry.UTF8String ?: "index.html");

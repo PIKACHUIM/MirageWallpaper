@@ -42,13 +42,9 @@ struct WallpaperPreview: SubviewOfContentView {
             ScrollView {
                 VStack(spacing: 16) {
                     VStack(spacing: 10) {
-                        GifImage(contentsOf: { (url: URL) in
-                            if let selectedProject = try? JSONDecoder()
-                                .decode(WEProject.self, from: Data(contentsOf: url.appending(path: "project.json"))) {
-                                return url.appending(path: selectedProject.preview)
-                            }
-                            return Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                        }(wallpaperViewModel.currentWallpaper.wallpaperDirectory))
+                        GifImage(contentsOf: wallpaperViewModel.currentWallpaper.project.preview.isEmpty
+                            ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
+                            : wallpaperViewModel.currentWallpaper.previewURL)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .background(Color(nsColor: NSColor.controlBackgroundColor))
@@ -59,14 +55,8 @@ struct WallpaperPreview: SubviewOfContentView {
                             if isEditingId == "title" {
                                 TextField("壁纸名称", text: $title)
                                     .onSubmit {
-                                        var wallpaper = wallpaperViewModel.currentWallpaper
-                                        
-                                        wallpaper.project.title = title
-                                        
-                                        guard let data = try? JSONEncoder().encode(wallpaper.project) else { return }
-                                        
-                                        try? data.write(to: wallpaper.wallpaperDirectory.appending(path: "project.json"), options: .atomic)
-                                        
+                                        guard let wallpaper = wallpaperViewModel.currentWallpaper
+                                            .updateStoredMetadata(title: title) else { return }
                                         wallpaperViewModel.currentWallpaper = wallpaper
                                         
                                         isEditingId = ""
@@ -111,10 +101,20 @@ struct WallpaperPreview: SubviewOfContentView {
                         }
                     }
                     HStack {
-                        Text(wallpaperViewModel.currentWallpaper.project.type)
+                        Text(wallpaperViewModel.currentWallpaper.isPreset
+                            ? (wallpaperViewModel.currentWallpaper.presetStatusDescription.map { "预设 · \($0)" }
+                                ?? "预设 · \(wallpaperViewModel.currentWallpaper.kind.displayName)")
+                            : wallpaperViewModel.currentWallpaper.project.type)
                         Text(sizeText)
                     }
                     .font(.footnote)
+
+                    if wallpaperViewModel.currentWallpaper.isPreset,
+                       let dependency = wallpaperViewModel.currentWallpaper.presetDependency {
+                        Label("基础壁纸：\(dependency.rawValue)", systemImage: "square.stack.3d.up.fill")
+                            .font(.caption)
+                            .foregroundStyle(wallpaperViewModel.currentWallpaper.needsPresetDependency ? .orange : .secondary)
+                    }
                     
                     ViewThatFits(in: .horizontal) {
                         tags.animation(.spring(), value: isTagsHovered)
@@ -142,9 +142,8 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     guard !newTag.isEmpty else { return }
                                     
-                                    var wallpaper = wallpaperViewModel.currentWallpaper
-                                    
-                                    var tags = wallpaper.project.tags ?? []
+                                    let current = wallpaperViewModel.currentWallpaper
+                                    var tags = current.project.tags ?? []
                                     
                                     tags = Array(Set(tags))
                                     
@@ -152,12 +151,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags = Array(Set(tags))
                                     
-                                    wallpaper.project.tags = tags.sorted()
-                                    
-                                    guard let data = try? JSONEncoder().encode(wallpaper.project) else { return }
-                                    
-                                    try? data.write(to: wallpaper.wallpaperDirectory.appending(path: "project.json"), options: .atomic)
-                                    
+                                    guard let wallpaper = current.updateStoredMetadata(tags: tags.sorted()) else { return }
                                     wallpaperViewModel.currentWallpaper = wallpaper
                                 }
                         }
@@ -323,9 +317,8 @@ struct WallpaperPreview: SubviewOfContentView {
                         .overlay(alignment: .topTrailing) {
                             if hoveredTag == tag {
                                 Button {
-                                    var wallpaper = wallpaperViewModel.currentWallpaper
-                                    
-                                    guard var tags = wallpaper.project.tags else { return }
+                                    let current = wallpaperViewModel.currentWallpaper
+                                    guard var tags = current.project.tags else { return }
                                     
                                     tags = Array(Set(tags))
                                     
@@ -333,12 +326,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags.remove(at: index)
                                     
-                                    wallpaper.project.tags = tags
-                                    
-                                    guard let data = try? JSONEncoder().encode(wallpaper.project) else { return }
-                                    
-                                    try? data.write(to: wallpaper.wallpaperDirectory.appending(path: "project.json"), options: .atomic)
-                                    
+                                    guard let wallpaper = current.updateStoredMetadata(tags: tags) else { return }
                                     wallpaperViewModel.currentWallpaper = wallpaper
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")

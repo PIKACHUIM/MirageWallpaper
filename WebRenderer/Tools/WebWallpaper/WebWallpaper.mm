@@ -25,6 +25,9 @@
 #import "WebRendererEngine.h"
 #import "WRDesktopInputForwarder.h"
 
+#include <string>
+#include <vector>
+
 struct WallpaperArgs {
     const char *workshop = nullptr;
     int   fps = 60;
@@ -34,6 +37,7 @@ struct WallpaperArgs {
     int   runSeconds = 0;
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
+    std::vector<std::string> assetOverlays;
 };
 
 static void PrintUsage(const char *argv0) {
@@ -44,6 +48,7 @@ static void PrintUsage(const char *argv0) {
         "  --volume 0..1          master volume (default 1.0)\n"
         "  --no-spectrum          disable audio-spectrum capture\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
+        "  --asset-overlay DIR    serve preset assets before base assets\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
@@ -68,6 +73,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.spectrum = NO;
         } else if (strcmp(arg, "--screen") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.screen = atoi(v);
+        } else if (strcmp(arg, "--asset-overlay") == 0) {
+            const char *v = take(i, arg); if (!v) return false; out.assetOverlays.emplace_back(v);
         } else if (strcmp(arg, "--run-seconds") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.runSeconds = atoi(v);
         } else if (strcmp(arg, "--diag") == 0) {
@@ -136,6 +143,12 @@ int main(int argc, char *argv[]) {
         cfg.enableAudioSpectrum = args.spectrum;
         cfg.initialVolume = args.volume;
         cfg.frameRate = args.fps;
+        NSMutableArray<NSString *> *assetOverlays = [NSMutableArray arrayWithCapacity:args.assetOverlays.size()];
+        for (const auto &path : args.assetOverlays) {
+            NSString *overlay = [NSString stringWithUTF8String:path.c_str()];
+            if (overlay != nil) [assetOverlays addObject:overlay];
+        }
+        cfg.assetOverlayDirectories = assetOverlays;
 
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:screenFrame config:cfg];
         delegate.engine = engine;

@@ -17,13 +17,9 @@ struct ExplorerItem: SubviewOfContentView {
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            GifImage(contentsOf: { (url: URL) in
-                if let selectedProject = try? JSONDecoder()
-                    .decode(WEProject.self, from: Data(contentsOf: url.appending(path: "project.json"))) {
-                    return url.appending(path: selectedProject.preview)
-                }
-                return Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-            }(wallpaper.wallpaperDirectory), animates: animates)
+            GifImage(contentsOf: wallpaper.project.preview.isEmpty
+                ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
+                : wallpaper.previewURL, animates: animates)
             .resizable()
             .scaleEffect(viewModel.imageScaleIndex == index ? 1.2 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
@@ -40,8 +36,27 @@ struct ExplorerItem: SubviewOfContentView {
         }
         .selected(wallpaper.wallpaperDirectory == wallpaperViewModel.currentWallpaper.wallpaperDirectory)
         .border(Color.accentColor, width: viewModel.imageScaleIndex == index ? 1.0 : 0)
+        .overlay(alignment: .topLeading) {
+            if wallpaper.isPreset {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("预设", systemImage: "slider.horizontal.3")
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.purple, in: RoundedRectangle(cornerRadius: 4))
+                    if let status = wallpaper.presetStatusDescription {
+                        Label(status, systemImage: "exclamationmark.triangle.fill")
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.orange, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+                .padding(6)
+            }
+        }
         .onTapGesture {
-            wallpaperViewModel.nextCurrentWallpaper = wallpaper
+            AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)
         }
     }
 }
