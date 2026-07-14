@@ -4,20 +4,16 @@ set -euo pipefail
 APP="${1:?用法: bundle_renderers.sh <Mirage.app> [SimpleRenderer根]}"
 ROOT="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
+# 共享的 CMake preset 命名约定。
+source "$ROOT/scripts/preset.sh"
+
 CONTENTS="$APP/Contents"
 FRAMEWORKS="$CONTENTS/Frameworks"
 RESOURCES="$CONTENTS/Resources"
 RENDERERS="$RESOURCES/Renderers"
 VK_ICD_DIR="$RENDERERS/vulkan/icd.d"
 
-# Detect architecture to resolve the correct SceneRenderer build preset.
-BUILD_ARCH="$(uname -m)"
-if [[ "$BUILD_ARCH" == "arm64" ]]; then
-    SCENE_PRESET="macos-arm64-clang-release"
-else
-    SCENE_PRESET="macos-clang-release"
-fi
-
+SCENE_PRESET="$(scene_preset release)"
 SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWallpaper"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"

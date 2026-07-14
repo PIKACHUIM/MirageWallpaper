@@ -25,6 +25,8 @@ final class RendererProcess {
     let wallpaper: WEWallpaper
     let screenIndex: Int
     private(set) var isTerminated = false
+    /// 与本次渲染关联的临时文件，在 stop() 时清理。
+    var tempFiles: [URL] = []
 
     init(process: Process, stdinPipe: Pipe, wallpaper: WEWallpaper, screenIndex: Int) {
         self.process = process
@@ -35,13 +37,18 @@ final class RendererProcess {
 
     func send(_ command: [String: Any]) {
         guard !isTerminated, process.isRunning else { return }
-        guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else {
+            NSLog("[Mirage] 无法序列化控制指令: \(command)")
+            return
+        }
         var line = data
         line.append(0x0A)
         let handle = stdinPipe.fileHandleForWriting
         do {
             try handle.write(contentsOf: line)
-        } catch { }
+        } catch {
+            NSLog("[Mirage] 发送控制指令失败 (屏幕=\(screenIndex)): \(error.localizedDescription)")
+        }
     }
 
     func stop() {
@@ -50,6 +57,11 @@ final class RendererProcess {
         send(["cmd": "quit"])
         let handle = stdinPipe.fileHandleForWriting
         try? handle.close()
+        // 清理关联的临时文件。
+        for url in tempFiles {
+            try? FileManager.default.removeItem(at: url)
+        }
+        tempFiles.removeAll()
         let proc = process
         DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
             if proc.isRunning { proc.terminate() }
@@ -195,9 +207,6 @@ final class RendererController {
             args += ["--screen", String(screenIndex)]
             args += ["--control-stdin"]
             if options.muted { args += ["--muted"] }
-            if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
-                args += ["--user-properties", propsFile.path]
-            }
             if let icd = moltenVKICD {
                 env["VK_ICD_FILENAMES"] = icd.path
                 env["VK_DRIVER_FILES"] = icd.path
@@ -238,6 +247,12 @@ final class RendererController {
         proc.standardError = stderrPipe
 
         let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
+
+        // 注册临时文件以便在进程停止时清理。
+        if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
+            args += ["--user-properties", propsFile.path]
+            handle.tempFiles.append(propsFile)
+        }
 
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
