@@ -182,6 +182,8 @@ gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 
 Workflow 会校验 Secret、构建并临时签名 App、验证三个渲染器、生成 `Mirage-<版本>-macOS-x86_64.zip` 和 SHA-256 文件，再将它们保留为 30 天的 Actions Artifact。
 
+每次推送到 `main` 且构建成功后，Workflow 还会用当前产物更新仓库唯一的 Pre-release。更新说明从最近一个正式 Release 开始收集到当前版本之间的全部 commit，每个 commit 单独一行；尚无正式 Release 时则列出完整提交历史。旧 Pre-release 及其标签会在发布前删除，正式 Release 不受影响。
+
 GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无法让客户端内置 Key 成为真正的秘密：发布后的 App 必须包含它，有能力分析 App 的人仍可以提取。若未来需要不可提取的凭据，应把对应请求放到受控服务端，由服务端持有 Key；不要依赖客户端混淆。
 
 当前 Workflow 使用临时签名，不包含 Apple Developer ID 签名和公证，因此产物适合测试与内部分发。正式公开发布建议再配置 Developer ID、Hardened Runtime 和 Apple Notary Service。
