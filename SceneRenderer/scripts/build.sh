@@ -28,6 +28,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
+
+# 共享的 CMake preset 命名约定。
+source "$ROOT_DIR/scripts/preset.sh"
+
 cd "$PROJECT_DIR"
 
 # --- terminal colors (disabled when not a TTY) ---
@@ -68,23 +73,14 @@ while [[ $# -gt 0 ]]; do
         -h|--help) usage; exit 0 ;;
         configure|build|all|clean) ACTION="$1"; shift ;;
         release|debug)
-            if [[ "$(uname -m)" == "arm64" ]]; then
-                POSITIONAL_PRESET="macos-arm64-clang-$1"
-            else
-                POSITIONAL_PRESET="macos-clang-$1"
-            fi
+            POSITIONAL_PRESET="$(scene_preset "$1")"
             shift ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
 done
 
 # --- preset resolution ---
-HOST_ARCH="$(uname -m)"
-if [[ "$HOST_ARCH" == "arm64" ]]; then
-    DEFAULT_PRESET="macos-arm64-clang-release"
-else
-    DEFAULT_PRESET="macos-clang-release"
-fi
+DEFAULT_PRESET="$(scene_preset release)"
 PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-$DEFAULT_PRESET}}"
 case "$PRESET" in
     macos-clang-release|macos-clang-debug|macos-arm64-clang-release|macos-arm64-clang-debug) ;;
