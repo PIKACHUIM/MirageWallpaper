@@ -17,8 +17,16 @@ concurrency:
 
 jobs:
   build:
-    name: Build and package
-    runs-on: macos-15-intel
+    name: Build and package (${{ matrix.arch }})
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -79,7 +87,7 @@ jobs:
           else
             version="${GITHUB_SHA:0:7}"
           fi
-          package="Mirage-${version}-macOS-x86_64.zip"
+          package="Mirage-${version}-macOS-${{ matrix.arch }}.zip"
           ditto -c -k --sequesterRsrc --keepParent \
             "Mirage/dist/Mirage.app" "Mirage/dist/$package"
           shasum -a 256 "Mirage/dist/$package" > "Mirage/dist/$package.sha256"
@@ -89,7 +97,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: Mirage-${{ steps.package.outputs.version }}-macOS-x86_64
+          name: Mirage-${{ steps.package.outputs.version }}-macOS-${{ matrix.arch }}
           path: |
             Mirage/dist/${{ steps.package.outputs.package }}
             Mirage/dist/${{ steps.package.outputs.package }}.sha256

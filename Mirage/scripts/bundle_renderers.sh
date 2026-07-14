@@ -10,11 +10,21 @@ RESOURCES="$CONTENTS/Resources"
 RENDERERS="$RESOURCES/Renderers"
 VK_ICD_DIR="$RENDERERS/vulkan/icd.d"
 
-SCENE_BIN="$ROOT/SceneRenderer/build/macos-clang-release/Tools/SceneWallpaper/SceneWallpaper"
+# Detect architecture to resolve the correct SceneRenderer build preset.
+BUILD_ARCH="$(uname -m)"
+if [[ "$BUILD_ARCH" == "arm64" ]]; then
+    SCENE_PRESET="macos-arm64-clang-release"
+else
+    SCENE_PRESET="macos-clang-release"
+fi
+
+SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWallpaper"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
 ASSETS_DIR="$ROOT/assets"
-MOLTENVK="/usr/local/opt/molten-vk/lib/libMoltenVK.dylib"
+
+BREW_PREFIX="$(brew --prefix)"
+MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
 
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"

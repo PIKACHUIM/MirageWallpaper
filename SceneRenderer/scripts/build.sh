@@ -67,16 +67,28 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         configure|build|all|clean) ACTION="$1"; shift ;;
-        release|debug) POSITIONAL_PRESET="macos-clang-$1"; shift ;;
+        release|debug)
+            if [[ "$(uname -m)" == "arm64" ]]; then
+                POSITIONAL_PRESET="macos-arm64-clang-$1"
+            else
+                POSITIONAL_PRESET="macos-clang-$1"
+            fi
+            shift ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
 done
 
 # --- preset resolution ---
-PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-macos-clang-release}}"
+HOST_ARCH="$(uname -m)"
+if [[ "$HOST_ARCH" == "arm64" ]]; then
+    DEFAULT_PRESET="macos-arm64-clang-release"
+else
+    DEFAULT_PRESET="macos-clang-release"
+fi
+PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-$DEFAULT_PRESET}}"
 case "$PRESET" in
-    macos-clang-release|macos-clang-debug) ;;
-    *) die "unknown preset: $PRESET (expected macos-clang-release or macos-clang-debug)" ;;
+    macos-clang-release|macos-clang-debug|macos-arm64-clang-release|macos-arm64-clang-debug) ;;
+    *) die "unknown preset: $PRESET (expected macos-clang-release, macos-clang-debug, macos-arm64-clang-release, or macos-arm64-clang-debug)" ;;
 esac
 BUILD_DIR="$PROJECT_DIR/build/$PRESET"
 

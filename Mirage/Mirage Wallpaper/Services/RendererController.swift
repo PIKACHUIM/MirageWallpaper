@@ -87,13 +87,50 @@ final class RendererController {
         resourcesDir.appending(path: "Renderers")
     }
 
+    // MARK: 架构与构建预设映射
+
+    /// 当前主机 CPU 架构标签：`"arm64"` 或 `"x86_64"`。
+    /// 用于在开发模式下定位对应架构的 CMake 构建输出目录。
+    private static var hostArch: String {
+        var info = utsname()
+        guard uname(&info) == 0 else { return "x86_64" }
+        let machine = withUnsafePointer(to: &info.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(_SYS_NAMELEN)) { String(cString: $0) }
+        }
+        return machine
+    }
+
+    /// CMake preset 命名约定：`macos-{arch}-clang-{config}`。
+    private static func sceneRendererPreset(config: String = "release") -> String {
+        "macos-\(hostArch)-clang-\(config)"
+    }
+
+    /// Homebrew 前缀路径，按当前架构优先排序。
+    private static var brewPrefixes: [URL] {
+        hostArch == "arm64"
+            ? [URL(fileURLWithPath: "/opt/homebrew"), URL(fileURLWithPath: "/usr/local")]
+            : [URL(fileURLWithPath: "/usr/local"), URL(fileURLWithPath: "/opt/homebrew")]
+    }
+
+    // 编译时获取本文件的源码路径，用于推导项目根目录（开发回退用）
+    private static let projectRoot: URL = {
+        // #filePath 是编译时常量，指向 RendererController.swift 的源码路径
+        // Mirage/Mirage Wallpaper/Services/RendererController.swift
+        let srcURL = URL(fileURLWithPath: #filePath)
+        // .../Services → .../Mirage Wallpaper → .../Mirage → 仓库根目录
+        return srcURL
+            .deletingLastPathComponent() // RendererController.swift → Services
+            .deletingLastPathComponent() // Services → Mirage Wallpaper
+            .deletingLastPathComponent() // Mirage Wallpaper → Mirage
+            .deletingLastPathComponent() // Mirage → 仓库根目录
+    }()
+
     private static let devFallback: [WallpaperKind: URL] = {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appending(path: "Desktop/SimpleRenderer")
+        let preset = sceneRendererPreset()
         return [
-            .scene: root.appending(path: "SceneRenderer/build/macos-clang-release/Tools/SceneWallpaper/SceneWallpaper"),
-            .web:   root.appending(path: "WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"),
-            .video: root.appending(path: "VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"),
+            .scene: projectRoot.appending(path: "SceneRenderer/build/\(preset)/Tools/SceneWallpaper/SceneWallpaper"),
+            .web:   projectRoot.appending(path: "WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"),
+            .video: projectRoot.appending(path: "VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"),
         ]
     }()
 
@@ -115,15 +152,18 @@ final class RendererController {
     private var sceneAssetsDir: URL {
         let bundled = resourcesDir.appending(path: "assets")
         if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Desktop/SimpleRenderer/assets")
+        return Self.projectRoot.appending(path: "assets")
     }
 
     private var moltenVKICD: URL? {
         let bundled = renderersDir.appending(path: "vulkan/icd.d/MoltenVK_icd.json")
         if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        let brew = URL(fileURLWithPath: "/usr/local/etc/vulkan/icd.d/MoltenVK_icd.json")
-        return FileManager.default.fileExists(atPath: brew.path) ? brew : nil
+        let icdSuffix = "etc/vulkan/icd.d/MoltenVK_icd.json"
+        for prefix in Self.brewPrefixes {
+            let path = prefix.appending(path: icdSuffix)
+            if FileManager.default.fileExists(atPath: path.path) { return path }
+        }
+        return nil
     }
 
     // MARK: 启动 / 切换 / 停止
@@ -147,7 +187,10 @@ final class RendererController {
 
         switch wallpaper.kind {
         case .scene:
-            args += [sceneAssetsDir.path, wallpaper.resolvedEntryURL.path]
+            let assetsPath = sceneAssetsDir.path
+            let pkgPath = wallpaper.resolvedEntryURL.path
+            NSLog("[Mirage] 场景参数: assets=\(assetsPath) exists=\(FileManager.default.fileExists(atPath: assetsPath)) pkg=\(pkgPath) exists=\(FileManager.default.fileExists(atPath: pkgPath))")
+            args += [assetsPath, pkgPath]
             args += ["--fps", String(options.fps)]
             args += ["--screen", String(screenIndex)]
             args += ["--control-stdin"]
@@ -189,17 +232,26 @@ final class RendererController {
         proc.environment = env
 
         let stdinPipe = Pipe()
+        let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
         proc.standardOutput = FileHandle.standardOutput
-        proc.standardError = FileHandle.standardError
+        proc.standardError = stderrPipe
 
         let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
 
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
+            let status = p.terminationStatus
+            let reason = p.terminationReason
+            let stderrData = try? stderrPipe.fileHandleForReading.readToEnd()
+            let stderrStr = stderrData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            if !stderrStr.isEmpty {
+                NSLog("[Mirage] 渲染器 stderr:\n\(stderrStr)")
+            }
+            NSLog("[Mirage] 渲染器退出 (屏幕=\(screenIndex), 状态=\(status), 原因=\(reason.rawValue))")
             self.queue.async {
                 if let current = self.running[screenIndex], current === handle {
-                    let abnormal = p.terminationStatus != 0 && !handle.isTerminated
+                    let abnormal = status != 0 && !handle.isTerminated
                     self.running[screenIndex] = nil
                     DispatchQueue.main.async { self.onProcessExit?(screenIndex, abnormal) }
                 }
