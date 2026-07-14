@@ -42,6 +42,9 @@ struct FirstLaunchView: View {
                 .padding(.vertical)
                 .padding(.horizontal, 50)
             }
+            ProjectFeedbackBanner(showsActions: false)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
             Button {
                 UserDefaults.standard.set(!checked, forKey: "IsFirstLaunch")
                 dismiss()

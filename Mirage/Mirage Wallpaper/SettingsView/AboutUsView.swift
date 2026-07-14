@@ -24,7 +24,7 @@ struct AboutUsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 40) {
+        VStack(spacing: 24) {
             HStack(spacing: 20) {
                 if let icon = NSImage(named: "AppIcon") {
                     Image(nsImage: icon)
@@ -49,8 +49,11 @@ struct AboutUsView: View {
                     .font(.footnote)
             }
             .font(.callout)
+            ProjectFeedbackBanner(showsActions: false)
+                .padding(.horizontal, 20)
         }
-        .frame(width: 420, height: 320)
+        .textSelection(.enabled)
+        .frame(width: 460, height: 390)
     }
 }
 

@@ -17,6 +17,9 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
+> [!IMPORTANT]
+> **Mirage 当前仍处于早期阶段。** 如果遇到问题，请认真撰写 [GitHub Issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose)，说明系统与 App 版本、复现步骤、预期结果、实际现象和相关日志；也可以加入 **QQ 交流群 2160040437** 反馈。
+
 Mirage 使用 SwiftUI 与 AppKit 提供壁纸浏览、管理和系统集成，并通过三个独立渲染进程播放场景、网页和视频壁纸。应用可以读取本地 Wallpaper Engine 风格的壁纸包，也可以直接浏览 Steam 创意工坊、安装 SteamCMD、登录 Steam 并下载壁纸。
 
 > Mirage 正在持续开发，Wallpaper Engine 场景格式的兼容性仍在完善。复杂作品可能存在特效、脚本或材质表现差异。

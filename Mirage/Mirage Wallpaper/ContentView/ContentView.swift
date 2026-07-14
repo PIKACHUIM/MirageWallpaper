@@ -29,6 +29,7 @@ struct ContentView: View {
                 if viewModel.isStaging {
                     VStack(spacing: 5) {
                         TopTabBar(contentViewModel: viewModel)
+                        ProjectFeedbackBanner()
                         switch viewModel.topTabBarSelection {
                         case 0:
                             ExplorerTopBar(contentViewModel: viewModel)
