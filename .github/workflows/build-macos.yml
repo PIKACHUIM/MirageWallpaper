@@ -126,12 +126,12 @@ jobs:
             exit 1
           fi
 
-          while IFS=$'\t' read -r release_id release_tag; do
+          while IFS=$'\t' read -r release_id old_release_tag; do
             [[ -z "$release_id" ]] && continue
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            if [[ -n "$release_tag" ]] && \
-               git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null 2>&1; then
-              git push origin ":refs/tags/$release_tag"
+            if [[ -n "$old_release_tag" ]] && \
+               git ls-remote --exit-code --tags origin "refs/tags/$old_release_tag" >/dev/null 2>&1; then
+              git push origin ":refs/tags/$old_release_tag"
             fi
           done < <(
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
