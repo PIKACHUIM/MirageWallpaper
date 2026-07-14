@@ -1,57 +1,84 @@
 <p align="center">
-  <img src="Mirage/Mirage%20Wallpaper/Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Mirage Wallpaper 图标">
+  <img src="Mirage/Mirage%20Wallpaper/Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Mirage 图标">
 </p>
 
-<h1 align="center">Mirage Wallpaper</h1>
+<h1 align="center">Mirage</h1>
 
 <p align="center">
-  一款面向 macOS 的原生动态壁纸引擎，支持视频、网页与场景类壁纸。
+  面向 macOS 的原生动态壁纸管理器与 Wallpaper Engine 兼容运行时。
 </p>
 
 <p align="center">
-  <img alt="macOS" src="https://img.shields.io/badge/platform-macOS%2014.2%2B-000000?logo=apple&logoColor=white">
+  <a href="https://github.com/laobamac/MirageWallpaper/actions/workflows/build-macos.yml"><img alt="Build macOS App" src="https://github.com/laobamac/MirageWallpaper/actions/workflows/build-macos.yml/badge.svg"></a>
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-14.2%2B-000000?logo=apple&logoColor=white">
+  <img alt="Architecture" src="https://img.shields.io/badge/architecture-x86__64-blue">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white">
   <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white">
-  <img alt="Vulkan" src="https://img.shields.io/badge/Vulkan-MoltenVK-AC162C?logo=vulkan&logoColor=white">
-  <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
-## 项目简介
+Mirage 使用 SwiftUI 与 AppKit 提供壁纸浏览、管理和系统集成，并通过三个独立渲染进程播放场景、网页和视频壁纸。应用可以读取本地 Wallpaper Engine 风格的壁纸包，也可以直接浏览 Steam 创意工坊、安装 SteamCMD、登录 Steam 并下载壁纸。
 
-Mirage Wallpaper 是一个 macOS 动态壁纸项目。它用 SwiftUI 构建主应用界面，并把不同类型的壁纸渲染拆分为独立子进程：视频壁纸交给 AVFoundation，网页壁纸交给 WKWebView，场景壁纸交给 C++20 + Vulkan/MoltenVK 渲染引擎。
+> Mirage 正在持续开发，Wallpaper Engine 场景格式的兼容性仍在完善。复杂作品可能存在特效、脚本或材质表现差异。
 
-项目目标不是做一个简单播放器，而是提供一套接近桌面级壁纸管理器的体验：壁纸库、搜索筛选、导入、预览、运行时属性调节、多显示器覆盖、系统托盘控制、自动省电策略，以及对 Wallpaper Engine 风格 `project.json` 包的兼容读取。
+## 主要功能
 
-> 当前项目处于持续开发阶段。核心渲染、导入、筛选、运行时控制与打包流程已经具备；播放列表、收藏、创意工坊浏览等入口仍在完善中。
+- 支持 `scene`、`web`、`video` 三类动态壁纸。
+- 浏览已安装壁纸，支持搜索、排序、类型/来源/标签/内容分级筛选和收藏。
+- 直接导入包含 `project.json` 的目录，或把 `.mp4`、`.mov`、`.m4v` 视频转换为本地壁纸包。
+- 浏览 Steam 创意工坊的趋势、最新、热门、评分和标签分类内容。
+- 由 Mirage 管理 SteamCMD 的安装、独立数据目录、Steam 登录和 Steam Guard 验证。
+- 复用已登录的 SteamCMD 控制台会话，避免每次下载前重复启动和登录。
+- 下载任务排队执行，展示启动、连接、下载、校验和完成状态；进度依据 SteamCMD 进程网络接收量与作品文件大小计算。
+- 已下载作品可直接播放，并打开音量、速度、填充模式及作品自定义属性侧栏。
+- 支持多显示器覆盖、菜单栏控制、登录启动和桌面占位图恢复。
+- 可在全屏应用、其他应用播放音频、屏幕休眠或电池供电时选择继续、静音、暂停或停止。
+- 网页壁纸首次运行前显示安全确认，并支持 Wallpaper Engine 用户属性与鼠标事件。
 
-## 功能亮点
+## 渲染架构
 
-| 模块 | 能力 |
-| --- | --- |
-| 壁纸类型 | 支持 `scene`、`web`、`video` 三类壁纸包 |
-| 视频渲染 | 基于 AVFoundation 循环播放，支持音量、静音、填充、适应、拉伸 |
-| 网页渲染 | 基于 WKWebView，支持用户属性注入、音频频谱开关、桌面鼠标事件转发 |
-| 场景渲染 | 基于 Vulkan/MoltenVK 与自研 SceneRenderer，支持 `scene.pkg` / `scene.json`、材质、粒子、LUT、渲染图 |
-| 壁纸库 | 读取 Steam Workshop 默认目录与本地导入目录，支持拖放导入 |
-| 管理体验 | 搜索、按名称/分级/大小排序、类型/来源/标签/分级筛选、标签编辑 |
-| 运行时控制 | 音量、速度、帧率、静音、暂停、停止、覆盖到所有显示器 |
-| 预设 | 壁纸属性可导入/导出为 JSON 预设 |
-| 系统集成 | 菜单栏控制、登录启动、深浅色外观、桌面占位图恢复 |
-| 省电策略 | 可在全屏应用、其他应用播放音频、显示器休眠、电池供电等场景下保持运行、静音、暂停或停止 |
-| 安全提示 | 网页壁纸首次应用前会触发信任确认，降低未知网页内容的误用风险 |
+| 组件 | 技术 | 职责 |
+| --- | --- | --- |
+| Mirage | SwiftUI、AppKit | 界面、壁纸库、创意工坊、设置、进程管理和系统集成 |
+| SceneWallpaper | C++20、Vulkan、MoltenVK | `scene.pkg` / `scene.json`、材质、粒子、LUT、文字和用户属性 |
+| WebWallpaper | Objective-C++、WKWebView | HTML 壁纸、JavaScript、媒体、鼠标事件和用户属性 |
+| VideoWallpaper | Objective-C++、AVFoundation | 视频循环、音量、速度和填充模式 |
 
-## 支持的壁纸包
+渲染器作为独立进程运行。Mirage 通过标准输入发送逐行 JSON 控制消息，因此单个渲染器异常不会直接破坏主应用状态。
 
-Mirage 以壁纸目录中的 `project.json` 作为入口。常见结构如下：
+## Steam 创意工坊
+
+Mirage 对 Steam 的两类访问彼此独立：
+
+| 用途 | 服务 | 是否需要 API Key |
+| --- | --- | --- |
+| 浏览、搜索和读取作品信息 | Steam Web API | 是 |
+| 登录、Steam Guard 和下载作品 | SteamCMD | 否，需要 Steam 账户 |
+
+应用内置的 Steam Web API Key 只用于首次浏览，并由所有用户共享。建议在“设置 → 通用 → Steam API Key”中填写自己的 Key，以避免共享额度繁忙。Key 可在 [Steam Web API Key 申请页面](https://steamcommunity.com/dev/apikey) 获取。
+
+中国大陆用户可以在设置中选择 SteamCF 浏览镜像。镜像只代理创意工坊浏览 API，不会加速 SteamCMD 登录或内容下载，并且仅允许中国大陆用户访问。
+
+SteamCMD 使用 Mirage 自己的目录，不复用系统 Steam 客户端的数据：
+
+```text
+~/Library/Application Support/Mirage/steamcmd
+```
+
+登录成功后，SteamCMD 会话会在 Mirage 运行期间持续保持；退出 Mirage、主动退出登录、取消导致进程终止或会话失效时才会结束。下载队列当前串行执行，这是因为同一个交互式 SteamCMD 会话一次只能可靠处理一个创意工坊命令。
+
+## 壁纸包格式
+
+壁纸目录以 `project.json` 为入口：
 
 ```text
 wallpaper-folder/
 ├── project.json
 ├── preview.jpg
-└── main-file
+└── wallpaper-file
 ```
 
-最小示例：
+最小视频壁纸示例：
 
 ```json
 {
@@ -62,186 +89,153 @@ wallpaper-folder/
 }
 ```
 
-| `type` | `file` 说明 | 当前行为 |
+| `type` | 常见入口 | 渲染方式 |
 | --- | --- | --- |
-| `video` | 视频文件路径 | 应用直接导入支持 `.mp4`、`.mov`、`.m4v`；渲染器还可从目录中识别常见视频扩展名 |
-| `web` | HTML 入口，缺省为 `index.html` | 使用 WKWebView 加载，并把 `general.properties` 注入给页面 |
-| `scene` | `scene.json` 或场景资源入口 | 若目录中存在 `scene.pkg` 会优先使用，否则使用 `project.json` 中的 `file` |
+| `scene` | `scene.pkg`、`scene.json` | SceneWallpaper |
+| `web` | HTML 文件，通常为 `index.html` | WebWallpaper |
+| `video` | 常见视频文件 | VideoWallpaper |
 
-项目内置的资源目录在 [assets](assets)，包含示例场景、材质、渐变、粒子贴图、LUT 与渲染器通用资源。打包脚本会把它们复制进最终 App。
+Mirage 会解析作品声明的入口文件，并对部分非标准目录布局进行兼容查找。目录仍必须包含有效的 `project.json`。
 
-## 应用数据位置
+## 系统与构建要求
 
-| 类型 | 默认路径 |
-| --- | --- |
-| Steam Workshop 壁纸 | `~/Library/Application Support/Steam/steamapps/workshop/content/431960` |
-| Mirage 本地导入 | `~/Library/Application Support/Mirage/Wallpapers` |
-| 运行时设置与信任列表 | `UserDefaults` |
-| 视频桌面占位图缓存 | macOS Caches 目录中的 `staticWP_*` 文件 |
-
-可以在应用内设置自定义 Workshop 目录和本地导入目录。
-
-## 架构概览
-
-```mermaid
-flowchart LR
-    A["Mirage.app<br>SwiftUI / AppKit"] --> B["RendererController"]
-    B --> C["SceneWallpaper<br>C++20 + Vulkan/MoltenVK"]
-    B --> D["WebWallpaper<br>ObjC++ + WKWebView"]
-    B --> E["VideoWallpaper<br>ObjC++ + AVFoundation"]
-    A --> F["WallpaperLibrary<br>project.json / 导入 / 删除"]
-    A --> G["GlobalSettings<br>省电策略 / 外观 / 登录启动"]
-    C --> H["assets<br>材质 / LUT / 粒子 / 场景资源"]
-```
-
-渲染器作为独立进程运行，主应用通过 stdin 发送 JSON 行指令进行实时控制。这样可以隔离不同渲染后端，也便于在渲染器异常退出时由主应用接管。
-
-常用控制指令包括：
-
-| 指令 | 用途 |
-| --- | --- |
-| `volume` / `muted` | 调节音量与静音 |
-| `pause` / `resume` | 暂停或恢复 |
-| `fps` / `speed` | 调节帧率或播放速度 |
-| `fillmode` | 切换视频填充方式 |
-| `setProperty` | 下发 Wallpaper Engine 风格用户属性 |
-| `quit` | 优雅退出渲染进程 |
-
-## 仓库结构
-
-```text
-.
-├── Mirage/                 # macOS 主应用，SwiftUI + AppKit
-├── SceneRenderer/          # 场景渲染器，C++20 modules + Vulkan/MoltenVK
-├── WebRenderer/            # 网页壁纸渲染器，ObjC++ + WKWebView
-├── VideoRenderer/          # 视频壁纸渲染器，ObjC++ + AVFoundation
-├── assets/                 # 场景、材质、贴图、LUT、字体等运行资源
-├── LICENSE                 # GPL-3.0
-└── README.md
-```
-
-## 环境要求
-
+- Intel Mac（`x86_64`）
 - macOS 14.2 或更高版本
-- Xcode / Command Line Tools
+- 完整版 Xcode
 - Homebrew
-- CMake 4.3.1 或更高版本，SceneRenderer 会拒绝已知会破坏 C++20 module BMI 规则的旧版本
-- Ninja、pkg-config、Homebrew LLVM、MoltenVK 与 Vulkan 相关组件
+- CMake 4.3.1 或更高版本
+- Homebrew LLVM、Ninja、pkg-config、MoltenVK、Vulkan Loader/Headers、GLFW、FreeType、Fontconfig、LZ4 和 FFmpeg
 
-安装常用依赖：
+安装依赖：
 
 ```bash
 xcode-select --install
-
 brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers \
   glfw freetype fontconfig lz4 ffmpeg
 ```
 
 ## 从源码构建
 
-推荐按下面顺序构建。前三步生成独立渲染器，最后一步构建主应用并把渲染器、动态库、MoltenVK ICD 与 `assets` 打进 App Bundle。
-
 ```bash
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./SceneRenderer/scripts/build.sh
-./WebRenderer/scripts/build.sh
-./VideoRenderer/scripts/build.sh
-
+./SceneRenderer/scripts/build.sh release
+./WebRenderer/scripts/build.sh release
+./VideoRenderer/scripts/build.sh release
 ./Mirage/scripts/build.sh Release
+
 open "Mirage/dist/Mirage.app"
 ```
 
-Debug 构建：
-
-```bash
-./SceneRenderer/scripts/build.sh debug
-./WebRenderer/scripts/build.sh debug
-./VideoRenderer/scripts/build.sh debug
-./Mirage/scripts/build.sh Debug
-```
-
-构建完成后，最终产物位于：
+最终 App 位于：
 
 ```text
 Mirage/dist/Mirage.app
 ```
 
-## 独立调试渲染器
+Debug 构建只需把四条构建命令中的 `release` / `Release` 分别改成 `debug` / `Debug`。
 
-每个渲染器都带有 Viewer 或 Wallpaper Host，适合单独排查壁纸包问题。
+### 本地配置内置 Steam Web API Key
+
+源码不包含默认 API Key。本地完整打包时，可以把 Key 放入已被 Git 忽略的文件：
 
 ```bash
-# SceneRenderer
-SceneRenderer/build/macos-clang-release/Tools/SceneViewer/SceneViewer <path/to/scene.pkg>
-
-# WebRenderer
-WebRenderer/build/release/Tools/WebViewer/WebViewer <path/to/web-wallpaper-dir>
-
-# VideoRenderer
-VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <path/to/video-wallpaper-dir>
+mkdir -p .secrets
+chmod 700 .secrets
+printf '%s\n' 'YOUR_32_CHARACTER_STEAM_WEB_API_KEY' > .secrets/steam_web_api_key
+chmod 600 .secrets/steam_web_api_key
 ```
 
-桌面壁纸 Host 的产物路径分别是：
+`Mirage/scripts/build.sh` 会读取该文件，通过临时 xcconfig 写入 App 的 Info.plist，并在构建结束后删除临时配置。也可以只对当前命令传入环境变量：
+
+```bash
+MIRAGE_STEAM_WEB_API_KEY='YOUR_32_CHARACTER_STEAM_WEB_API_KEY' \
+  ./Mirage/scripts/build.sh Release
+```
+
+没有内置 Key 时 App 仍可正常编译，开发者可以在运行后的设置中填写自己的 Key。
+
+## GitHub Actions 自动打包
+
+[Build macOS App](.github/workflows/build-macos.yml) 会在以下情况使用 `macos-15-intel` 自动构建三个渲染器和 Mirage：
+
+- 推送到 `main`；
+- 推送名称以 `v` 开头的标签；
+- 在 Actions 页面手动运行。
+
+首次运行前，在仓库的 **Settings → Secrets and variables → Actions** 中添加 Repository Secret：
 
 ```text
-SceneRenderer/build/macos-clang-release/Tools/SceneWallpaper/SceneWallpaper
-WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper
-VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper
+Name:  MIRAGE_STEAM_WEB_API_KEY
+Value: 32 位 Steam Web API Key
 ```
 
-## 使用方式
+如果本机安装了 GitHub CLI，也可以执行：
 
-1. 启动 Mirage。
-2. 在壁纸库中浏览默认 Workshop 目录和本地导入目录中的壁纸。
-3. 点击壁纸卡片即可应用到主显示器。
-4. 通过右侧预览面板调节音量、速度、填充模式、壁纸属性和预设。
-5. 使用“覆盖到所有显示器”把当前壁纸应用到所有屏幕。
-6. 从菜单栏图标快速打开 Mirage、导入壁纸、静音、暂停、停止或退出。
+```bash
+gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
+```
 
-导入支持两种方式：
+Workflow 会校验 Secret、构建并临时签名 App、验证三个渲染器、生成 `Mirage-<版本>-macOS-x86_64.zip` 和 SHA-256 文件，再将它们保留为 30 天的 Actions Artifact。
 
-- 点击“导入壁纸”，选择包含 `project.json` 的壁纸文件夹。
-- 拖放壁纸文件夹或视频文件到壁纸库区域。
+GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无法让客户端内置 Key 成为真正的秘密：发布后的 App 必须包含它，有能力分析 App 的人仍可以提取。若未来需要不可提取的凭据，应把对应请求放到受控服务端，由服务端持有 Key；不要依赖客户端混淆。
 
-## 常见问题
+当前 Workflow 使用临时签名，不包含 Apple Developer ID 签名和公证，因此产物适合测试与内部分发。正式公开发布建议再配置 Developer ID、Hardened Runtime 和 Apple Notary Service。
 
-### 直接从 Xcode 运行时找不到渲染器
+## 数据目录
 
-主应用优先从 App Bundle 的 `Contents/Resources/Renderers` 查找渲染器。推荐使用 `./Mirage/scripts/build.sh Release` 生成完整 App 后运行。若要直接从 Xcode 启动，需要手动放置渲染器，或调整 `RendererController.devFallback` 中的本地路径。
+| 数据 | 默认位置 |
+| --- | --- |
+| Mirage 本地壁纸 | `~/Library/Application Support/Mirage/Wallpapers` |
+| Mirage 管理的 SteamCMD | `~/Library/Application Support/Mirage/steamcmd` |
+| Mirage SteamCMD 下载内容 | Mirage 管理目录中的 `steamapps/workshop/content/431960` |
+| 系统 Steam 创意工坊内容 | `~/Library/Application Support/Steam/steamapps/workshop/content/431960` |
+| 创意工坊预览缓存 | `~/Library/Caches/Mirage/WorkshopCache` |
+| 壁纸运行时设置 | `UserDefaults` |
 
-### 打包时提示找不到 MoltenVK
+Mirage 会同时发现系统 Steam、Mirage SteamCMD 和自定义目录中的有效作品。
 
-当前打包脚本默认查找：
+## 仓库结构
 
 ```text
-/usr/local/opt/molten-vk/lib/libMoltenVK.dylib
+.
+├── Mirage/                 # SwiftUI / AppKit 主应用与打包脚本
+├── SceneRenderer/          # C++20 + Vulkan/MoltenVK 场景渲染器
+├── WebRenderer/            # WKWebView 网页渲染器
+├── VideoRenderer/          # AVFoundation 视频渲染器
+├── assets/                 # 场景运行时资源、材质、着色器、字体和 LUT
+├── .github/workflows/      # macOS 自动构建与打包
+└── LICENSE
 ```
 
-如果你的 Homebrew 安装在 `/opt/homebrew`，请把 [Mirage/scripts/bundle_renderers.sh](Mirage/scripts/bundle_renderers.sh) 中的 `MOLTENVK` 改为实际路径，或建立对应软链接。
+## 独立调试渲染器
 
-### Web 壁纸为什么会弹出安全确认
+```bash
+SceneRenderer/build/macos-clang-release/Tools/SceneViewer/SceneViewer <scene.pkg>
+WebRenderer/build/release/Tools/WebViewer/WebViewer <web-wallpaper-directory>
+VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-directory>
+```
 
-网页壁纸可以执行本地 HTML/JavaScript。Mirage 会在首次应用未信任的网页壁纸时提示确认，确认后会把该壁纸加入信任列表。
+桌面 Host 分别输出到各项目构建目录下的 `Tools/SceneWallpaper`、`Tools/WebWallpaper` 和 `Tools/VideoWallpaper`。
 
-### 为什么某些按钮不可用
+## 贡献
 
-播放列表、收藏、创意工坊浏览、举报等界面入口仍处于开发中，当前代码中部分按钮是占位状态。
+提交前请至少确认：
 
-## 贡献建议
-
-- 提交前优先确认三个渲染器能独立构建。
-- 涉及 App 打包时，请运行 `./Mirage/scripts/build.sh Release` 验证 Bundle 内资源与依赖是否完整。
-- 修改壁纸属性、导入逻辑或渲染控制协议时，请同时检查 `project.json` 解析、运行时持久化和对应渲染器控制命令。
-- 大型资源请放入合适的 `assets` 子目录，并注意最终 App 体积。
+1. 三个渲染器可以独立构建；
+2. `./Mirage/scripts/build.sh Release` 能生成完整 App Bundle；
+3. App Bundle 中包含三个渲染器、运行时动态库、MoltenVK ICD 和 `assets`；
+4. 没有提交 API Key、Steam 登录数据、构建目录或用户壁纸。
 
 ## 鸣谢
+
 - [MoltenVK](https://github.com/KhronosGroup/MoltenVK) 提供运行时转译
 - [wallpaper-engine-mac](https://github.com/MrWindDog/wallpaper-engine-mac) 的UI框架 
 - [waywallen/ParticleSystem](https://github.com/waywallen/open-wallpaper-engine/blob/main/src/Scene/Particle/ParticleSystem.cpp) 的粒子系统 
 - [laobamac/OpenMetalWallpaper](https://github.com/laobamac/OpenMetalWallpaper) 的模型解析 
+- [rstd](https://github.com/hypengw/rstd)
 
 ## 许可证
 
-本项目使用 [GPL-3.0](LICENSE) 许可证发布。仓库中包含的第三方组件和资源遵循各自许可证要求。
+Mirage 使用 [GPL-3.0](LICENSE) 发布。仓库中的第三方代码与资源继续遵循各自许可证。Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获得其官方认可。
