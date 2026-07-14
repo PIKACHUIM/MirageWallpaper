@@ -112,9 +112,13 @@ final class RendererController {
         return machine
     }
 
-    /// CMake preset naming convention: `macos-{arch}-clang-{config}`.
+    /// CMake preset naming convention:
+    ///   Intel:    `macos-clang-{config}` (no arch suffix)
+    ///   Silicon:  `macos-arm64-clang-{config}`
     private static func sceneRendererPreset(config: String = "release") -> String {
-        "macos-\(hostArch)-clang-\(config)"
+        hostArch == "arm64"
+            ? "macos-arm64-clang-\(config)"
+            : "macos-clang-\(config)"
     }
 
     /// Homebrew prefix paths, ordered by current architecture preference.

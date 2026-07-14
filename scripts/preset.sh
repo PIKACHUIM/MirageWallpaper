@@ -17,5 +17,11 @@ scene_preset() {
     local config="${1:-release}"
     local arch
     arch="$(uname -m)"
-    echo "macos-${arch}-clang-${config}"
+    # Intel preset names omit the architecture suffix (macos-clang-*),
+    # while Apple Silicon presets include -arm64 (macos-arm64-clang-*).
+    if [[ "$arch" == "arm64" ]]; then
+        echo "macos-arm64-clang-${config}"
+    else
+        echo "macos-clang-${config}"
+    fi
 }
