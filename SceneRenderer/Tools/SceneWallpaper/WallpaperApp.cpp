@@ -3,8 +3,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <xlocale.h>
 
 import sr.json;
 import rstd.cppstd;
@@ -93,6 +96,23 @@ bool ParseInt(std::string_view text, int& out) {
     return true;
 }
 
+bool ParseDouble(std::string_view text, double& out) {
+    if (text.empty()) return false;
+    std::string value_text(text);
+    char*       parsed_end = nullptr;
+    static locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    errno = 0;
+    const double value = c_locale != nullptr
+                             ? strtod_l(value_text.c_str(), &parsed_end, c_locale)
+                             : std::strtod(value_text.c_str(), &parsed_end);
+    if (errno == ERANGE || parsed_end != value_text.data() + value_text.size() ||
+        ! std::isfinite(value)) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
 std::optional<Resolution> ParseResolution(std::string_view text) {
     const auto x = text.find('x');
     if (x == std::string_view::npos) return std::nullopt;
@@ -111,9 +131,7 @@ std::optional<std::array<double, 2>> ParseMousePosition(std::string_view text) {
     double y = 0.0;
     auto   xs = text.substr(0, comma);
     auto   ys = text.substr(comma + 1);
-    auto   xr = std::from_chars(xs.data(), xs.data() + xs.size(), x);
-    auto   yr = std::from_chars(ys.data(), ys.data() + ys.size(), y);
-    if (xr.ec != std::errc {} || yr.ec != std::errc {}) return std::nullopt;
+    if (! ParseDouble(xs, x) || ! ParseDouble(ys, y)) return std::nullopt;
     return std::array { std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0) };
 }
 

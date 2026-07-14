@@ -24,6 +24,7 @@
         "CMAKE_C_COMPILER":   "/usr/local/opt/llvm/bin/clang",
         "CMAKE_CXX_COMPILER": "/usr/local/opt/llvm/bin/clang++",
         "CMAKE_LINKER_TYPE":  "DEFAULT",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.2",
         "CMAKE_PREFIX_PATH":  "/usr/local;/opt/homebrew;/usr/local/opt/llvm;/opt/homebrew/opt/llvm;/usr/local/opt/molten-vk;/opt/homebrew/opt/molten-vk;/usr/local/opt/vulkan-loader;/opt/homebrew/opt/vulkan-loader;/usr/local/opt/vulkan-headers;/opt/homebrew/opt/vulkan-headers;/usr/local/opt/ffmpeg;/opt/homebrew/opt/ffmpeg;/usr/local/opt/glfw;/opt/homebrew/opt/glfw;/usr/local/opt/freetype;/opt/homebrew/opt/freetype;/usr/local/opt/lz4;/opt/homebrew/opt/lz4"
       },
       "environment": {

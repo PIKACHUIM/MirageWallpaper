@@ -5,6 +5,11 @@
 
 #include <argparse/argparse.hpp>
 
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <xlocale.h>
+
 import rstd.cppstd;
 import rstd.log;
 import sr.scene_wallpaper;
@@ -170,6 +175,23 @@ void updateCallback() {
     glfwPostEmptyEvent();
 }
 
+bool parseDouble(std::string_view text, double& out) {
+    if (text.empty()) return false;
+    std::string value_text(text);
+    char*       parsed_end = nullptr;
+    static locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    errno = 0;
+    const double value = c_locale != nullptr
+                             ? strtod_l(value_text.c_str(), &parsed_end, c_locale)
+                             : std::strtod(value_text.c_str(), &parsed_end);
+    if (errno == ERANGE || parsed_end != value_text.data() + value_text.size() ||
+        ! std::isfinite(value)) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
 std::optional<std::array<double, 2>> parseMousePosition(const std::string& value) {
     if (value.empty()) return std::nullopt;
     const auto comma = value.find(',');
@@ -178,9 +200,7 @@ std::optional<std::array<double, 2>> parseMousePosition(const std::string& value
     double y  = 0.0;
     auto   xs = value.substr(0, comma);
     auto   ys = value.substr(comma + 1);
-    auto   xr = std::from_chars(xs.data(), xs.data() + xs.size(), x);
-    auto   yr = std::from_chars(ys.data(), ys.data() + ys.size(), y);
-    if (xr.ec != std::errc {} || yr.ec != std::errc {}) return std::nullopt;
+    if (! parseDouble(xs, x) || ! parseDouble(ys, y)) return std::nullopt;
     return std::array { std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0) };
 }
 

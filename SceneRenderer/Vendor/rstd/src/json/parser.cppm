@@ -1,7 +1,13 @@
 module;
+#include <cerrno>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <system_error>
+#if defined(__APPLE__)
+#include <xlocale.h>
+#endif
 
 export module rstd.json:parser;
 export import :value;
@@ -283,15 +289,28 @@ class Parser {
         const char* first  = reinterpret_cast<const char*>(input_.data() + begin);
         const char* last   = reinterpret_cast<const char*>(input_.data() + end);
         f64         value  = 0.0;
+#if defined(__APPLE__)
+        std::string token(first, last);
+        char*       parsed_end = nullptr;
+        static locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+        errno = 0;
+        value = c_locale != nullptr ? strtod_l(token.c_str(), &parsed_end, c_locale)
+                                    : std::strtod(token.c_str(), &parsed_end);
+        const bool out_of_range = errno == ERANGE && (value == 0.0 || ! std::isfinite(value));
+        const bool invalid = parsed_end != token.data() + token.size();
+#else
         auto        result = std::from_chars(first, last, value, std::chars_format::general);
+        const bool  out_of_range = result.ec == std::errc::result_out_of_range;
+        const bool  invalid = result.ec != std::errc {} || result.ptr != last;
+#endif
 
-        if (result.ec == std::errc::result_out_of_range) {
+        if (out_of_range) {
             if (token_underflows(begin, end) || token_is_zero(begin, end)) {
                 value = input_.data()[begin] == '-' ? -0.0 : 0.0;
             } else {
                 return Err(error(ErrorCode::NumberOutOfRange));
             }
-        } else if (result.ec != std::errc {} || result.ptr != last || ! std::isfinite(value)) {
+        } else if (invalid || ! std::isfinite(value)) {
             return Err(error(ErrorCode::InvalidNumber));
         }
 
