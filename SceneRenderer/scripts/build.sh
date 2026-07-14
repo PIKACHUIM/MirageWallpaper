@@ -97,6 +97,7 @@ REQUIRED_FORMULAS=(
     "molten-vk|MoltenVK Vulkan ICD"
     "vulkan-loader|libvulkan loader"
     "vulkan-headers|Vulkan headers"
+    "glslang|glslangValidator shader compiler"
     "glfw|GLFW (SceneViewer window)"
     "freetype|FreeType (text rasterization)"
     "fontconfig|Fontconfig (font discovery)"
@@ -118,6 +119,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     printf '\nInstall missing dependencies:\n  brew install %s\n\n' "${missing[*]}"
     die "missing Homebrew dependencies (see above)."
 fi
+command -v glslangValidator >/dev/null || die "glslangValidator not found. Run: brew install glslang"
 
 # --- compiler: always use Homebrew LLVM. ---
 # The preset pins /usr/local/opt/llvm/bin/clang (Intel Mac path). On Apple

@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           brew install cmake ninja pkg-config llvm molten-vk vulkan-loader \
-            vulkan-headers glfw freetype fontconfig lz4 ffmpeg
+            vulkan-headers glslang glfw freetype fontconfig lz4 ffmpeg
 
       - name: Build renderers
         shell: bash
