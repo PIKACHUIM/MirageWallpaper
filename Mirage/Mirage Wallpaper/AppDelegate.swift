@@ -99,6 +99,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.settingsWindow.makeKeyAndOrderFront(nil)
     }
 
+    @objc func openSteamAPIKeySettings() {
+        globalSettingsViewModel.selection = 1
+        settingsWindow.toolbar?.selectedItemIdentifier = SettingsToolbarIdentifiers.general
+        openSettingsWindow()
+    }
+
     @objc func openMainWindow() {
         NSApp.setActivationPolicy(.regular)
         self.mainWindowController.window?.makeKeyAndOrderFront(nil)

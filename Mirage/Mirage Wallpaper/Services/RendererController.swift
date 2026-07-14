@@ -147,9 +147,7 @@ final class RendererController {
 
         switch wallpaper.kind {
         case .scene:
-            let pkg = wallpaper.wallpaperDirectory.appending(path: "scene.pkg")
-            let entry = FileManager.default.fileExists(atPath: pkg.path) ? pkg : wallpaper.entryURL
-            args += [sceneAssetsDir.path, entry.path]
+            args += [sceneAssetsDir.path, wallpaper.resolvedEntryURL.path]
             args += ["--fps", String(options.fps)]
             args += ["--screen", String(screenIndex)]
             args += ["--control-stdin"]

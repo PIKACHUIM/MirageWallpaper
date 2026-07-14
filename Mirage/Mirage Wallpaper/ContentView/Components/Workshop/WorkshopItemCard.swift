@@ -40,7 +40,10 @@ struct WorkshopItemCard: View {
                 }
                 .frame(minHeight: 120)
 
-                if isDownloaded {
+                if let state = downloadState {
+                    downloadBadge(state)
+                        .padding(6)
+                } else if isDownloaded {
                     HStack(spacing: 3) {
                         Image(systemName: "checkmark")
                             .font(.caption2)
@@ -54,9 +57,6 @@ struct WorkshopItemCard: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .padding(6)
-                } else if let state = downloadState {
-                    downloadBadge(state)
-                        .padding(6)
                 }
             }
 
@@ -117,18 +117,25 @@ struct WorkshopItemCard: View {
         switch state {
         case .downloading(let percent):
             HStack(spacing: 4) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.3), lineWidth: 2)
-                        .frame(width: 14, height: 14)
-                    Circle()
-                        .trim(from: 0, to: percent)
-                        .stroke(Color.white, lineWidth: 2)
-                        .frame(width: 14, height: 14)
-                        .rotationEffect(.degrees(-90))
+                if let percent {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.3), lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                        Circle()
+                            .trim(from: 0, to: percent)
+                            .stroke(Color.white, lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                            .rotationEffect(.degrees(-90))
+                    }
+                    Text("\(Int(percent * 100))%")
+                        .font(.caption2)
+                } else {
+                    Image(systemName: "arrow.down")
+                        .font(.caption2)
+                    Text("连接中")
+                        .font(.caption2)
                 }
-                Text("\(Int(percent * 100))%")
-                    .font(.caption2)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -173,7 +180,17 @@ struct WorkshopItemCard: View {
             .foregroundStyle(.white)
             .clipShape(RoundedRectangle(cornerRadius: 4))
         case .completed:
-            EmptyView()
+            HStack(spacing: 3) {
+                Image(systemName: "checkmark")
+                    .font(.caption2)
+                Text("已下载")
+                    .font(.caption2)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.green)
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
         }
     }
 }

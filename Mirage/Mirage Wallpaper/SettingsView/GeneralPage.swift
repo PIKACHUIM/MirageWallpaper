@@ -12,6 +12,10 @@ struct GeneralPage: SettingsPage {
     @State private var pathRefresh = 0
     @State private var showMirrorWarning = false
 
+    private var apiKeyIsEmpty: Bool {
+        viewModel.settings.normalizedSteamAPIKey.isEmpty
+    }
+
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
     }
@@ -132,10 +136,10 @@ struct GeneralPage: SettingsPage {
             }
             .id(pathRefresh)
 
-            if TimeZone.current.secondsFromGMT() == 8 * 3600 {
+            if MirageRegion.isMainlandChina {
                 Section {
                     Picker("Steam API 线路", selection: $viewModel.settings.steamAPIEndpoint) {
-                        Text("SteamWebAPI").tag(GSSteamAPIEndpoint.official)
+                        Text("Steam 官方 Web API").tag(GSSteamAPIEndpoint.official)
                         Text("SteamCF 镜像").tag(GSSteamAPIEndpoint.mirror)
                     }
                     .onChange(of: viewModel.settings.steamAPIEndpoint) { _, newValue in
@@ -156,15 +160,43 @@ struct GeneralPage: SettingsPage {
                         viewModel.settings.steamAPIEndpoint = .official
                     }
                 } message: {
-                    Text("这是镜像 API，非官方，不保证安全性和可用性。镜像 API 不镜像下载，只能加速 API 回应而不能加速下载。")
+                    Text("该镜像仅允许中国大陆用户访问，且并非 Steam 官方服务，不保证安全性和可用性。它只代理浏览 API，不能加速 SteamCMD 登录或壁纸下载。")
                 }
             }
 
             Section {
                 VStack(alignment: .leading, spacing: 4) {
+                    if !viewModel.settings.hasValidCustomSteamAPIKey {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.key.fill")
+                                .font(.title2)
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(apiKeyIsEmpty ? "请设置您自己的 Steam Web API Key" : "Steam Web API Key 格式无效")
+                                    .font(.callout)
+                                    .bold()
+                                Text(apiKeyIsEmpty
+                                     ? "内置 Key 由所有用户共享，可能因请求过多而暂时不可用。设置专属 Key 可显著提高创意工坊浏览稳定性。它只用于浏览，不影响 SteamCMD 登录和壁纸下载。"
+                                     : "Steam Web API Key 应为 32 位十六进制字符。当前将继续使用内置 Key。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
                     TextField("Steam Web API Key", text: $viewModel.settings.steamAPIKey)
                         .textFieldStyle(.roundedBorder)
-                    Text("可前往 [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) 申请。填写域名时随意编写即可，不要使用已被注册的大型域名（如 baidu.com）。留空则使用内置 Key。")
+                        .font(.system(.body, design: .monospaced))
+                    if viewModel.settings.hasValidCustomSteamAPIKey {
+                        Label("已设置专属 API Key", systemImage: "checkmark.seal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                    Text("可前往 [Steam API Key 申请页面](https://steamcommunity.com/dev/apikey) 申请，并按页面要求填写域名。Key 仅用于 Mirage 在本机请求创意工坊浏览数据，请勿分享。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

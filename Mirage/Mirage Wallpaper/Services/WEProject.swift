@@ -424,6 +424,13 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     var id: String { wallpaperDirectory.path(percentEncoded: false) }
 
     var entryURL: URL { wallpaperDirectory.appending(path: project.file) }
+    var resolvedEntryURL: URL {
+        if kind == .scene {
+            let package = wallpaperDirectory.appending(path: "scene.pkg")
+            if FileManager.default.fileExists(atPath: package.path) { return package }
+        }
+        return entryURL
+    }
     var previewURL: URL { wallpaperDirectory.appending(path: project.preview) }
     var kind: WallpaperKind { project.normalizedType }
     var isValid: Bool { project != .invalid && !project.file.isEmpty }

@@ -7,11 +7,19 @@
 import SwiftUI
 
 struct DiscoverView: View {
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
 
+    @State private var showAPIKeyReminder = false
+
     var body: some View {
         ScrollView {
+            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
+                SteamAPIKeyReminderBanner()
+                    .padding(.horizontal)
+            }
+
             if workshopViewModel.isDiscoverLoading && workshopViewModel.bannerItems.isEmpty {
                 VStack(spacing: 20) {
                     ProgressView()
@@ -149,9 +157,18 @@ struct DiscoverView: View {
             }
         }
         .onAppear {
+            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
+                showAPIKeyReminder = SteamAPIKeyReminderPolicy.shouldPresent()
+            }
             if workshopViewModel.bannerItems.isEmpty {
                 workshopViewModel.loadDiscover()
             }
+        }
+        .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
+            Button("立即设置") { AppDelegate.shared.openSteamAPIKeySettings() }
+            Button("暂时使用内置 Key", role: .cancel) { }
+        } message: {
+            Text("内置 Key 由所有 Mirage 用户共享，繁忙时可能导致创意工坊无法加载。设置您自己的免费 API Key 后将不再提醒。此 Key 只影响浏览，不影响登录和下载。")
         }
     }
 }

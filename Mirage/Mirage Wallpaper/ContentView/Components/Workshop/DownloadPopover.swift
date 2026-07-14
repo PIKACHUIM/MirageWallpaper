@@ -8,6 +8,7 @@ import SwiftUI
 
 struct DownloadPopover: View {
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @State private var revealError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +20,7 @@ struct DownloadPopover: View {
                     Button {
                         workshopViewModel.clearCompletedDownloads()
                     } label: {
-                        Text("清除已完成")
+                        Text("清除记录")
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -67,6 +68,7 @@ struct DownloadPopover: View {
                 let active = workshopViewModel.downloadQueue.filter {
                     if case .downloading = $0.state { return true }
                     if case .starting = $0.state { return true }
+                    if case .validating = $0.state { return true }
                     return false
                 }.count
                 let completed = workshopViewModel.downloadQueue.filter {
@@ -88,6 +90,14 @@ struct DownloadPopover: View {
             .padding(.vertical, 8)
         }
         .frame(width: 420)
+        .alert("无法打开下载目录", isPresented: Binding(
+            get: { revealError != nil },
+            set: { if !$0 { revealError = nil } }
+        )) {
+            Button("好", role: .cancel) { revealError = nil }
+        } message: {
+            Text(revealError ?? "未知错误")
+        }
     }
 
     private var hasCompleted: Bool {
@@ -99,9 +109,15 @@ struct DownloadPopover: View {
     }
 
     private func revealInFinder(_ task: DownloadTask) {
-        let path = WallpaperLibrary.shared.steamWorkshopDirectory
-            .appending(path: task.workshopItem.publishedFileId)
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path.path)
+        guard let path = SteamCMDManager.shared.downloadedItemDirectory(
+            workshopId: task.workshopItem.publishedFileId
+        ) else {
+            revealError = "未找到该壁纸的本地下载目录。"
+            return
+        }
+        if !NSWorkspace.shared.open(path) {
+            revealError = "Finder 无法打开该壁纸目录。"
+        }
     }
 }
 
@@ -135,7 +151,7 @@ struct DownloadRow: View {
                 switch task.state {
                 case .queued:
                     HStack(spacing: 6) {
-                        Text("排队中...")
+                        Text("等待 SteamCMD 按顺序下载…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -144,14 +160,22 @@ struct DownloadRow: View {
                             .foregroundStyle(.tertiary)
                     }
                 case .starting:
-                    Text("准备中...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("正在启动 SteamCMD…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 case .downloading(let percent):
-                    ProgressView(value: percent)
-                        .animation(.linear, value: percent)
+                    if let percent {
+                        ProgressView(value: percent)
+                            .animation(.linear, value: percent)
+                    } else {
+                        ProgressView(value: 0)
+                    }
                     HStack {
-                        Text("\(Int(percent * 100))%")
+                        Text(percent.map { "\(Int($0 * 100))%" } ?? "正在连接 Steam…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -178,8 +202,10 @@ struct DownloadRow: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .lineLimit(1)
+                        .help(msg)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             switch task.state {
             case .downloading, .starting, .queued:
@@ -209,6 +235,7 @@ struct DownloadRow: View {
                     .frame(width: 20, height: 20)
             }
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: NSColor.controlBackgroundColor))

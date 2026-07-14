@@ -232,7 +232,7 @@ struct DownloadTask: Identifiable, Equatable {
 enum DownloadState: Equatable {
     case queued
     case starting
-    case downloading(percent: Double)
+    case downloading(percent: Double?)
     case validating
     case completed
     case failed(String)

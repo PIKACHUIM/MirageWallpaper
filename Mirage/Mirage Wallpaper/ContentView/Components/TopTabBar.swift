@@ -57,30 +57,32 @@ struct TopTabBar: SubviewOfContentView {
                     Button {
                         viewModel.topTabBarSelection = 2
                     } label: {
-                        ZStack(alignment: .topTrailing) {
-                            Label("创意工坊", systemImage: "cloud.fill")
-                                .contentShape(Rectangle())
-                                .foregroundStyle(viewModel.topTabBarSelection == 2 ? .white : .primary)
-                                .foregroundStyle(viewModel.topTabBarHoverSelection == 2 ? .white : .primary)
-                                .font(.title3)
-                                .padding(4)
-                            if AppDelegate.shared.workshopViewModel.activeDownloadCount > 0 {
-                                Text("\(AppDelegate.shared.workshopViewModel.activeDownloadCount)")
-                                    .font(.system(size: 9))
-                                    .bold()
-                                    .foregroundStyle(.white)
-                                    .padding(3)
-                                    .background(Color.red)
-                                    .clipShape(Circle())
-                                    .offset(x: 4, y: -2)
-                            }
-                        }
+                        Label("创意工坊", systemImage: "cloud.fill")
+                            .contentShape(Rectangle())
+                            .foregroundStyle(viewModel.topTabBarSelection == 2 ? .white : .primary)
+                            .foregroundStyle(viewModel.topTabBarHoverSelection == 2 ? .white : .primary)
+                            .font(.title3)
+                            .padding(.vertical, 4)
+                            .padding(.leading, 4)
+                            .padding(.trailing, AppDelegate.shared.workshopViewModel.activeDownloadCount > 0 ? 16 : 4)
                     }
                     .background(viewModel.topTabBarSelection == 2 ? Color.blue : Color.clear)
                     .background(viewModel.topTabBarHoverSelection == 2 ? Color.blue : Color.clear)
                     .overlay(Rectangle()
                         .stroke(lineWidth: 2)
                         .foregroundStyle(Color.accentColor))
+                    .overlay(alignment: .topTrailing) {
+                        if AppDelegate.shared.workshopViewModel.activeDownloadCount > 0 {
+                            Text("\(AppDelegate.shared.workshopViewModel.activeDownloadCount)")
+                                .font(.system(size: 9))
+                                .bold()
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .frame(minWidth: 14, minHeight: 14)
+                                .background(Color.red, in: Capsule())
+                                .padding(2)
+                        }
+                    }
                     .onHover { hovering in
                         viewModel.topTabBarHoverSelection = hovering ? 2 : -1
                     }

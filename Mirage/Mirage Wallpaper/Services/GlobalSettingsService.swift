@@ -66,6 +66,12 @@ enum GSSteamAPIEndpoint: String, CaseIterable, Identifiable, Codable {
     case mirror
 }
 
+enum MirageRegion {
+    static var isMainlandChina: Bool {
+        Locale.current.region?.identifier.uppercased() == "CN"
+    }
+}
+
 struct GlobalSettings: Codable, Equatable {
     // MARK: Playback
     var otherApplicationFocused = GSPlayback.keepRunning
@@ -119,6 +125,14 @@ struct GlobalSettings: Codable, Equatable {
     // MARK: Steam Workshop
     var steamAPIEndpoint = GSSteamAPIEndpoint.official
     var steamAPIKey = ""
+
+    var normalizedSteamAPIKey: String {
+        steamAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var hasValidCustomSteamAPIKey: Bool {
+        normalizedSteamAPIKey.range(of: "^[A-Fa-f0-9]{32}$", options: .regularExpression) != nil
+    }
 }
 
 class GlobalSettingsViewModel: ObservableObject {
@@ -144,7 +158,7 @@ class GlobalSettingsViewModel: ObservableObject {
         } else {
             self.settings = GlobalSettings()
         }
-        if TimeZone.current.secondsFromGMT() != 8 * 3600 {
+        if !MirageRegion.isMainlandChina {
             self.settings.steamAPIEndpoint = .official
         }
         self.didFinishLaunchingNotificationCancellable =

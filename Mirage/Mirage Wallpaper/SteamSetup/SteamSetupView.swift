@@ -97,6 +97,9 @@ struct SteamSetupView: View {
             }
             .padding(16)
         }
+        .onDisappear {
+            viewModel.cancelPendingWork()
+        }
     }
 
     // MARK: - Step Indicator
@@ -219,7 +222,7 @@ struct SteamSetupView: View {
                 .font(.title)
                 .bold()
 
-            Text("现在可以在创意工坊中浏览并下载壁纸了。")
+            Text("Steam 登录已完成。Wallpaper Engine 所有权与项目访问权限将在首次下载时由 Steam 验证。")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

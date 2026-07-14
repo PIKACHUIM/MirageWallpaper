@@ -7,14 +7,20 @@
 import SwiftUI
 
 struct WorkshopView: View {
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
 
     @State private var hoveredId: String?
     @State private var isDownloadPopoverPresented = false
+    @State private var showAPIKeyReminder = false
 
     var body: some View {
         VStack(spacing: 8) {
+            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
+                SteamAPIKeyReminderBanner()
+            }
+
             HStack {
                 WorkshopSearchBar(workshopViewModel: workshopViewModel)
 
@@ -46,7 +52,7 @@ struct WorkshopView: View {
                 steamAccountSection
             }
 
-            if workshopViewModel.steamSetupState != .ready && workshopViewModel.items.isEmpty && !workshopViewModel.isLoading {
+            if workshopViewModel.steamSetupState != .ready {
                 steamSetupBanner
             }
 
@@ -96,8 +102,7 @@ struct WorkshopView: View {
                                 hoveredId = hovered ? item.id : nil
                             }
                             .onTapGesture {
-                                workshopViewModel.showCustomization = false
-                                workshopViewModel.selectedItem = item
+                                workshopViewModel.selectWorkshopItem(item)
                             }
                             .overlay {
                                 if workshopViewModel.selectedItem?.id == item.id {
@@ -120,10 +125,17 @@ struct WorkshopView: View {
             }
         }
         .onAppear {
+            presentAPIKeyReminderIfNeeded()
             workshopViewModel.checkSteamSetup()
             if workshopViewModel.items.isEmpty {
                 workshopViewModel.search()
             }
+        }
+        .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
+            Button("立即设置") { AppDelegate.shared.openSteamAPIKeySettings() }
+            Button("暂时使用内置 Key", role: .cancel) { }
+        } message: {
+            Text("内置 Key 由所有 Mirage 用户共享，繁忙时可能导致创意工坊无法加载。设置您自己的免费 API Key 后将不再提醒。此 Key 只影响浏览，不影响登录和下载。")
         }
         .onChange(of: viewModel.topTabBarSelection) { _, _ in
             if viewModel.topTabBarSelection == 2 {
@@ -155,16 +167,25 @@ struct WorkshopView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button {
-                    workshopViewModel.logout()
-                } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if workshopViewModel.isLoggingOut {
+                    HStack(spacing: 5) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("正在退出…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button {
+                        workshopViewModel.logout()
+                    } label: {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("退出 Steam")
                 }
-                .buttonStyle(.plain)
-                .help("登出 Steam")
-                .disabled(workshopViewModel.isLoggingOut)
             }
         } else {
             Button {
@@ -233,4 +254,47 @@ struct WorkshopView: View {
         )
     }
 
+    private func presentAPIKeyReminderIfNeeded() {
+        guard !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey else { return }
+        showAPIKeyReminder = SteamAPIKeyReminderPolicy.shouldPresent()
+    }
+
+}
+
+enum SteamAPIKeyReminderPolicy {
+    static func shouldPresent() -> Bool {
+        let key = "SteamAPIKeyReminderLastShown"
+        let now = Date().timeIntervalSince1970
+        guard now - UserDefaults.standard.double(forKey: key) >= 24 * 60 * 60 else { return false }
+        UserDefaults.standard.set(now, forKey: key)
+        return true
+    }
+}
+
+struct SteamAPIKeyReminderBanner: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.key.fill")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("建议设置专属 Steam Web API Key")
+                    .font(.callout)
+                    .bold()
+                Text("内置 Key 由所有用户共享，可能因请求过多影响浏览；专属 Key 不影响 SteamCMD 登录和下载。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("立即设置") {
+                AppDelegate.shared.openSteamAPIKeySettings()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.3), lineWidth: 1))
+    }
 }

@@ -31,7 +31,7 @@ struct SteamLoginStep: View {
                 .font(.title2)
                 .bold()
 
-            Text("需要一个拥有 Wallpaper Engine 的 Steam 账号来下载创意工坊内容。")
+            Text("需要一个拥有 Wallpaper Engine 的全球 Steam 账号来下载创意工坊内容。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -134,11 +134,29 @@ struct SteamLoginStep: View {
 
     var loginForm: some View {
         VStack(spacing: 10) {
+            if let savedUsername = viewModel.reusableSessionUsername {
+                Button {
+                    viewModel.useSavedSession()
+                } label: {
+                    Label("使用已保存会话：\(savedUsername)", systemImage: "person.crop.circle.badge.checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                HStack {
+                    Divider()
+                    Text("或使用密码登录")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                }
+            }
+
             HStack {
                 Image(systemName: "person.fill")
                     .foregroundStyle(.secondary)
                     .frame(width: 20)
-                TextField("Steam 用户名", text: $viewModel.username)
+                TextField("全球 Steam 登录账户名（非昵称）", text: $viewModel.username)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -268,7 +286,9 @@ struct SteamLoginStep: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .scaleEffect(0.8)
-                Text("等待确认中...")
+                Text(viewModel.guardWaitElapsed > 0
+                     ? "等待确认中… \(viewModel.guardWaitElapsed) 秒"
+                     : "等待确认中…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

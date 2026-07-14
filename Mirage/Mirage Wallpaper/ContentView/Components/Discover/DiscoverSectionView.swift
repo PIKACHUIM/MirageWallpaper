@@ -56,8 +56,7 @@ struct DiscoverSectionView: View {
                             }
                         }
                         .onTapGesture {
-                            workshopViewModel.showCustomization = false
-                            workshopViewModel.selectedItem = item
+                            workshopViewModel.selectWorkshopItem(item)
                         }
                     }
                 }
@@ -151,11 +150,16 @@ struct DiscoverCard: View {
                 Circle()
                     .fill(.ultraThinMaterial)
                     .frame(width: 20, height: 20)
-                Circle()
-                    .trim(from: 0, to: percent)
-                    .stroke(Color.blue, lineWidth: 2)
-                    .frame(width: 16, height: 16)
-                    .rotationEffect(.degrees(-90))
+                if let percent {
+                    Circle()
+                        .trim(from: 0, to: percent)
+                        .stroke(Color.blue, lineWidth: 2)
+                        .frame(width: 16, height: 16)
+                        .rotationEffect(.degrees(-90))
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
             }
         case .queued, .starting:
             Image(systemName: "clock.fill")

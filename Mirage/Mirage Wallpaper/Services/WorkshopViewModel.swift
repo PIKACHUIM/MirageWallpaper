@@ -66,6 +66,7 @@ class WorkshopViewModel: ObservableObject {
 
     private var searchDebounce: AnyCancellable?
     private var serviceStateCancellables = Set<AnyCancellable>()
+    private var cancelledDownloadIDs: Set<String> = []
 
     init() {
         searchDebounce = $searchText
@@ -78,7 +79,10 @@ class WorkshopViewModel: ObservableObject {
 
         SteamCMDManager.shared.$isLoggedIn
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshSetupState() }
+            .sink { [weak self] isLoggedIn in
+                self?.refreshSetupState()
+                if isLoggedIn { self?.processDownloadQueue() }
+            }
             .store(in: &serviceStateCancellables)
 
         SteamCMDManager.shared.$authenticationState
@@ -101,6 +105,7 @@ class WorkshopViewModel: ObservableObject {
                 guard let self else { return }
                 if let path {
                     self.steamServiceStatus.steamCMD = .available(path.path)
+                    cmdManager.refreshSessionIfNeeded()
                 } else {
                     self.steamServiceStatus.steamCMD = .unavailable("未安装 SteamCMD")
                 }
@@ -251,8 +256,14 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func cancelDownload(_ item: WorkshopItem) {
+        guard let index = downloadQueue.firstIndex(where: { $0.id == item.publishedFileId }) else { return }
+        if case .queued = downloadQueue[index].state {
+            downloadQueue.remove(at: index)
+            processDownloadQueue()
+            return
+        }
+        cancelledDownloadIDs.insert(item.publishedFileId)
         SteamCMDManager.shared.cancelDownload(workshopId: item.publishedFileId)
-        downloadQueue.removeAll { $0.id == item.publishedFileId }
     }
 
     func retryDownload(_ task: DownloadTask) {
@@ -270,6 +281,17 @@ class WorkshopViewModel: ObservableObject {
 
     func downloadState(for workshopId: String) -> DownloadState? {
         downloadQueue.first(where: { $0.id == workshopId })?.state
+    }
+
+    func selectWorkshopItem(_ item: WorkshopItem) {
+        if let wallpaper = installedWallpaper(workshopId: item.publishedFileId) {
+            AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
+            showCustomization = true
+            selectedItem = nil
+        } else {
+            showCustomization = false
+            selectedItem = item
+        }
     }
 
     private func processDownloadQueue() {
@@ -301,6 +323,13 @@ class WorkshopViewModel: ObservableObject {
 
             self.downloadQueue[idx].state = state
 
+            if self.cancelledDownloadIDs.contains(workshopId), case .failed = state {
+                self.cancelledDownloadIDs.remove(workshopId)
+                self.downloadQueue.removeAll { $0.id == workshopId }
+                self.processDownloadQueue()
+                return
+            }
+
             if case .completed = state {
                 self.steamServiceStatus.workshopDownload = .available("最近一次下载已验证")
                 self.downloadQueue[idx].completedAt = Date()
@@ -309,7 +338,9 @@ class WorkshopViewModel: ObservableObject {
                 self.applyDownloadedWallpaper(workshopId: workshopId)
             } else if case .failed = state {
                 self.steamServiceStatus.workshopDownload = .unavailable("最近一次下载失败")
-                self.processDownloadQueue()
+                if SteamCMDManager.shared.isLoggedIn {
+                    self.processDownloadQueue()
+                }
             } else if case .starting = state {
                 self.steamServiceStatus.workshopDownload = .checking
             }
@@ -348,7 +379,7 @@ class WorkshopViewModel: ObservableObject {
             switch result {
             case .success:
                 self.steamServiceStatus.authentication = .needsAction("已退出登录")
-                self.logoutResultMessage = "已退出 Steam，并清除了 Mirage 本机保存的 SteamCMD 会话。"
+                self.logoutResultMessage = "已退出 Mirage 专用 SteamCMD 会话。"
             case .failure(let error):
                 self.steamServiceStatus.authentication = .needsAction(error.localizedDescription)
                 self.logoutResultMessage = error.localizedDescription
@@ -361,22 +392,24 @@ class WorkshopViewModel: ObservableObject {
 
     private func applyDownloadedWallpaper(workshopId: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            let lib = WallpaperLibrary.shared
-            for dir in [lib.steamWorkshopDirectory, SteamCMDManager.shared.steamCMDContentDirectory] {
-                let wallpaperDir = dir.appending(path: workshopId)
-                let projectFile = wallpaperDir.appending(path: "project.json")
-                if FileManager.default.fileExists(atPath: projectFile.path) {
-                    let wallpaper = WEWallpaper.load(from: wallpaperDir)
-                    if wallpaper.isValid {
-                        AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
-                        // 留在创意工坊标签，右侧改显当前壁纸的自定义面板
-                        self?.showCustomization = true
-                        self?.selectedItem = nil
-                        return
-                    }
-                }
-            }
+            guard let self, let wallpaper = self.installedWallpaper(workshopId: workshopId) else { return }
+            AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper = wallpaper
+            self.showCustomization = true
+            self.selectedItem = nil
         }
+    }
+
+    private func installedWallpaper(workshopId: String) -> WEWallpaper? {
+        guard let directory = SteamCMDManager.shared.downloadedItemDirectory(workshopId: workshopId) else {
+            return nil
+        }
+        let wallpaper = WEWallpaper.load(from: directory)
+        guard wallpaper.isValid,
+              wallpaper.kind != .unsupported,
+              FileManager.default.fileExists(atPath: wallpaper.resolvedEntryURL.path) else {
+            return nil
+        }
+        return wallpaper
     }
 }
 

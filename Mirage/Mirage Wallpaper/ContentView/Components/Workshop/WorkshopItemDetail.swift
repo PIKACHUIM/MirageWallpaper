@@ -172,7 +172,8 @@ struct WorkshopItemDetail: View {
 
     @ViewBuilder
     func downloadSection(for item: WorkshopItem) -> some View {
-        let isDownloaded = SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
+        let hasDownloadTask = workshopViewModel.downloadState(for: item.publishedFileId) != nil
+        let isDownloaded = !hasDownloadTask && SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
         if isDownloaded {
             Button { } label: {
                 Label("已下载", systemImage: "checkmark.circle.fill")
@@ -181,13 +182,33 @@ struct WorkshopItemDetail: View {
             .buttonStyle(.borderedProminent)
             .tint(.green)
             .disabled(true)
+        } else if workshopViewModel.steamSetupState != .ready {
+            VStack(spacing: 6) {
+                Text(workshopViewModel.steamServiceStatus.workshopDownload.summary)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Button {
+                    AppDelegate.shared.openSteamSetup()
+                } label: {
+                    Label(
+                        workshopViewModel.steamSetupState == .steamCMDMissing ? "安装 SteamCMD" : "登录全球 Steam",
+                        systemImage: "person.crop.circle.badge.exclamationmark"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         } else if let state = workshopViewModel.downloadState(for: item.publishedFileId) {
             switch state {
             case .downloading(let percent):
                 VStack(spacing: 4) {
-                    ProgressView(value: percent)
-                        .animation(.linear, value: percent)
-                    Text("\(Int(percent * 100))% 下载中...")
+                    if let percent {
+                        ProgressView(value: percent)
+                            .animation(.linear, value: percent)
+                    } else {
+                        ProgressView(value: 0)
+                    }
+                    Text(percent.map { "\(Int($0 * 100))% 下载中…" } ?? "正在连接 Steam…")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -205,11 +226,18 @@ struct WorkshopItemDetail: View {
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(true)
-            case .starting, .validating:
+            case .starting:
                 HStack {
                     ProgressView()
                         .scaleEffect(0.7)
-                    Text("处理中...")
+                    Text("正在启动 SteamCMD…")
+                        .font(.caption)
+                }
+            case .validating:
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("正在验证下载文件…")
                         .font(.caption)
                 }
             case .failed(let msg):

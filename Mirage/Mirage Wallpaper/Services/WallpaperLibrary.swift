@@ -95,9 +95,11 @@ final class WallpaperLibrary {
 
     private var sourceDirectories: [URL] {
         var dirs = [steamWorkshopDirectory, importedDirectory]
+        if isWorkshopDirectoryCustomized, fm.fileExists(atPath: defaultSteamWorkshopDirectory.path) {
+            dirs.append(defaultSteamWorkshopDirectory)
+        }
         if SteamCMDManager.shared.steamCMDPath != nil {
-            let steamCMDContent = SteamCMDManager.shared.steamCMDContentDirectory
-            if fm.fileExists(atPath: steamCMDContent.path) {
+            for steamCMDContent in SteamCMDManager.shared.steamCMDContentDirectories where fm.fileExists(atPath: steamCMDContent.path) {
                 dirs.append(steamCMDContent)
             }
         }
