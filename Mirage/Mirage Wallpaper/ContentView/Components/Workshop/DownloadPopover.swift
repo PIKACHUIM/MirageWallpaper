@@ -144,9 +144,20 @@ struct DownloadRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 4))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.workshopItem.title)
-                    .font(.callout)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(task.workshopItem.title)
+                        .font(.callout)
+                        .lineLimit(1)
+                    if task.workshopItem.isPreset {
+                        Text("预设")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.purple)
+                    } else if task.purpose == .presetDependency {
+                        Text("基础壁纸")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.orange)
+                    }
+                }
 
                 switch task.state {
                 case .queued:

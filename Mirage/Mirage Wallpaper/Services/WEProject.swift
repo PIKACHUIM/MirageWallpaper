@@ -133,6 +133,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     var step: Double?
     var fraction: Bool?
     var mode: String?
+    var isPresetOnly: Bool
 
     var text: String?
     var type: String
@@ -149,6 +150,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case condition, index, options, order, min, max, step, fraction, mode, text, type, value
+        case isPresetOnly = "_miragePresetOnly"
     }
 
     init(from decoder: Decoder) throws {
@@ -162,16 +164,18 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
         self.step = try? c.decode(Double.self, forKey: .step)
         self.fraction = try? c.decode(Bool.self, forKey: .fraction)
         self.mode = try? c.decode(String.self, forKey: .mode)
+        self.isPresetOnly = (try? c.decode(Bool.self, forKey: .isPresetOnly)) ?? false
         self.text = try? c.decode(String.self, forKey: .text)
         self.type = (try? c.decode(String.self, forKey: .type)) ?? "text"
         self.value = (try? c.decode(WEPropertyValue.self, forKey: .value)) ?? .string("")
     }
 
-    init(type: String, value: WEPropertyValue, text: String? = nil, order: Int? = nil) {
+    init(type: String, value: WEPropertyValue, text: String? = nil, order: Int? = nil, isPresetOnly: Bool = false) {
         self.type = type
         self.value = value
         self.text = text
         self.order = order
+        self.isPresetOnly = isPresetOnly
     }
 }
 
@@ -317,9 +321,11 @@ struct WEProject: Codable, Equatable, Hashable {
     var approved: Bool?
     var author: String?
     var contentrating: String?
+    var dependency: WorkshopId?
     var description: String?
     var file: String
     var general: WEProjectGeneral?
+    var preset: [String: WEPropertyValue]?
     var preview: String
     var tags: [String]?
     var title: String
@@ -330,6 +336,7 @@ struct WEProject: Codable, Equatable, Hashable {
     var version: Int?
 
     var normalizedType: WallpaperKind { WallpaperKind(rawType: type) }
+    var isWorkshopPreset: Bool { dependency != nil && preset != nil }
 
     // WE project.json rarely has an author field; derive it from the title
     // (`[name]…`) or description (`作者：X` / `by X`). nil when nothing matches.
@@ -371,16 +378,19 @@ struct WEProject: Codable, Equatable, Hashable {
                               title: "未知",
                               type: "video")
 
-    init(approved: Bool? = nil, author: String? = nil, contentrating: String? = nil, description: String? = nil,
-         file: String, general: WEProjectGeneral? = nil, preview: String,
+    init(approved: Bool? = nil, author: String? = nil, contentrating: String? = nil,
+         dependency: WorkshopId? = nil, description: String? = nil,
+         file: String, general: WEProjectGeneral? = nil, preset: [String: WEPropertyValue]? = nil, preview: String,
          tags: [String]? = nil, title: String, visibility: String? = nil,
          workshopid: WorkshopId? = nil, workshopurl: String? = nil, type: String, version: Int? = nil) {
         self.approved = approved
         self.author = author
         self.contentrating = contentrating
+        self.dependency = dependency
         self.description = description
         self.file = file
         self.general = general
+        self.preset = preset
         self.preview = preview
         self.tags = tags
         self.title = title
@@ -389,6 +399,90 @@ struct WEProject: Codable, Equatable, Hashable {
         self.workshopurl = workshopurl
         self.type = type
         self.version = version
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case approved, author, contentrating, dependency, description, file, general, preset
+        case preview, tags, title, visibility, workshopid, workshopurl, type, version
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        approved = try? c.decode(Bool.self, forKey: .approved)
+        author = try? c.decode(String.self, forKey: .author)
+        contentrating = try? c.decode(String.self, forKey: .contentrating)
+        dependency = try? c.decode(WorkshopId.self, forKey: .dependency)
+        description = try? c.decode(String.self, forKey: .description)
+        file = (try? c.decode(String.self, forKey: .file)) ?? ""
+        general = try? c.decode(WEProjectGeneral.self, forKey: .general)
+        preset = try? c.decode([String: WEPropertyValue].self, forKey: .preset)
+        preview = (try? c.decode(String.self, forKey: .preview)) ?? ""
+        tags = try? c.decode([String].self, forKey: .tags)
+        title = (try? c.decode(String.self, forKey: .title)) ?? "未命名"
+        visibility = try? c.decode(String.self, forKey: .visibility)
+        workshopid = try? c.decode(WorkshopId.self, forKey: .workshopid)
+        workshopurl = try? c.decode(String.self, forKey: .workshopurl)
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        version = try? c.decode(Int.self, forKey: .version)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(approved, forKey: .approved)
+        try c.encodeIfPresent(author, forKey: .author)
+        try c.encodeIfPresent(contentrating, forKey: .contentrating)
+        try c.encodeIfPresent(dependency, forKey: .dependency)
+        try c.encodeIfPresent(description, forKey: .description)
+        if !file.isEmpty { try c.encode(file, forKey: .file) }
+        try c.encodeIfPresent(general, forKey: .general)
+        try c.encodeIfPresent(preset, forKey: .preset)
+        if !preview.isEmpty { try c.encode(preview, forKey: .preview) }
+        try c.encodeIfPresent(tags, forKey: .tags)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(visibility, forKey: .visibility)
+        try c.encodeIfPresent(workshopid, forKey: .workshopid)
+        try c.encodeIfPresent(workshopurl, forKey: .workshopurl)
+        if !type.isEmpty { try c.encode(type, forKey: .type) }
+        try c.encodeIfPresent(version, forKey: .version)
+    }
+
+    func applyingPreset(_ presetProject: WEProject) -> WEProject {
+        var result = self
+        var properties = result.general?.properties?.items ?? [:]
+        for (key, value) in presetProject.preset ?? [:] {
+            if var property = properties[key] {
+                property.value = value
+                properties[key] = property
+            } else {
+                properties[key] = WEProjectProperty(
+                    type: Self.inferredPropertyType(for: value),
+                    value: value,
+                    isPresetOnly: true
+                )
+            }
+        }
+        result.general = WEProjectGeneral(properties: WEProjectProperties(items: properties))
+        result.approved = presetProject.approved ?? result.approved
+        result.author = presetProject.author ?? result.author
+        result.contentrating = presetProject.contentrating ?? result.contentrating
+        result.dependency = presetProject.dependency
+        result.description = presetProject.description ?? result.description
+        result.preset = presetProject.preset
+        if !presetProject.preview.isEmpty { result.preview = presetProject.preview }
+        result.tags = presetProject.tags ?? result.tags
+        if !presetProject.title.isEmpty { result.title = presetProject.title }
+        result.visibility = presetProject.visibility ?? result.visibility
+        result.workshopid = presetProject.workshopid ?? result.workshopid
+        result.workshopurl = presetProject.workshopurl ?? result.workshopurl
+        return result
+    }
+
+    private static func inferredPropertyType(for value: WEPropertyValue) -> String {
+        switch value {
+        case .bool: return "bool"
+        case .number: return "slider"
+        case .string: return "textinput"
+        }
     }
 }
 
@@ -419,21 +513,39 @@ enum WallpaperKind: String {
 struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable {
 
     var wallpaperDirectory: URL
+    var renderDirectory: URL
+    var assetOverlayDirectories: [URL]
     var project: WEProject
+    var presetDependency: WorkshopId?
+    var presetStatus: WEPresetStatus
 
     var id: String { wallpaperDirectory.path(percentEncoded: false) }
 
-    var entryURL: URL { wallpaperDirectory.appending(path: project.file) }
+    var entryURL: URL { renderDirectory.appending(path: project.file) }
     var resolvedEntryURL: URL {
         if kind == .scene {
-            let package = wallpaperDirectory.appending(path: "scene.pkg")
+            let package = renderDirectory.appending(path: "scene.pkg")
             if FileManager.default.fileExists(atPath: package.path) { return package }
         }
         return entryURL
     }
     var previewURL: URL { wallpaperDirectory.appending(path: project.preview) }
     var kind: WallpaperKind { project.normalizedType }
-    var isValid: Bool { project != .invalid && !project.file.isEmpty }
+    var isPreset: Bool { presetDependency != nil }
+    var needsPresetDependency: Bool {
+        isPreset && (presetStatus == .missingDependency || presetStatus == .invalidDependency)
+    }
+    var presetStatusDescription: String? {
+        switch presetStatus {
+        case .notPreset, .resolved: return nil
+        case .missingDependency: return "缺少基础壁纸"
+        case .invalidDependency: return "基础壁纸无效"
+        case .circularDependency: return "预设循环依赖"
+        }
+    }
+    var isValid: Bool {
+        project != .invalid && !project.file.isEmpty && (!isPreset || presetStatus == .resolved)
+    }
 
     var rawValue: String {
         guard let data = try? JSONEncoder().encode(self),
@@ -449,9 +561,15 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
         return size
     }
 
-    init(using project: WEProject, where url: URL) {
+    init(using project: WEProject, where url: URL, renderDirectory: URL? = nil,
+         assetOverlayDirectories: [URL] = [], presetDependency: WorkshopId? = nil,
+         presetStatus: WEPresetStatus = .notPreset) {
         self.wallpaperDirectory = url
+        self.renderDirectory = renderDirectory ?? url
+        self.assetOverlayDirectories = assetOverlayDirectories
         self.project = project
+        self.presetDependency = presetDependency
+        self.presetStatus = presetStatus
     }
 
     init?(rawValue: String) {
@@ -462,7 +580,10 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
         self = wallpaper
     }
 
-    enum CodingKeys: CodingKey { case wallpaperDirectory, project }
+    enum CodingKeys: CodingKey {
+        case wallpaperDirectory, renderDirectory, assetOverlayDirectories, project
+        case presetDependency, presetStatus
+    }
 
     nonisolated(unsafe) static var sizeCache: [String: Int] = [:]
 
@@ -471,13 +592,21 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.wallpaperDirectory = try c.decode(URL.self, forKey: .wallpaperDirectory)
+        self.renderDirectory = (try? c.decode(URL.self, forKey: .renderDirectory)) ?? wallpaperDirectory
+        self.assetOverlayDirectories = (try? c.decode([URL].self, forKey: .assetOverlayDirectories)) ?? []
         self.project = try c.decode(WEProject.self, forKey: .project)
+        self.presetDependency = try? c.decode(WorkshopId.self, forKey: .presetDependency)
+        self.presetStatus = (try? c.decode(WEPresetStatus.self, forKey: .presetStatus)) ?? .notPreset
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(wallpaperDirectory, forKey: .wallpaperDirectory)
+        try c.encode(renderDirectory, forKey: .renderDirectory)
+        try c.encode(assetOverlayDirectories, forKey: .assetOverlayDirectories)
         try c.encode(project, forKey: .project)
+        try c.encodeIfPresent(presetDependency, forKey: .presetDependency)
+        try c.encode(presetStatus, forKey: .presetStatus)
     }
 
     static func == (lhs: WEWallpaper, rhs: WEWallpaper) -> Bool {
@@ -487,12 +616,75 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     func hash(into hasher: inout Hasher) { hasher.combine(wallpaperDirectory) }
 
     static func load(from url: URL) -> WEWallpaper {
+        load(from: url, visited: [])
+    }
+
+    private static func load(from url: URL, visited: Set<String>) -> WEWallpaper {
         if let data = try? Data(contentsOf: url.appending(path: "project.json")),
            let project = try? JSONDecoder().decode(WEProject.self, from: data) {
-            return WEWallpaper(using: project, where: url)
+            guard project.isWorkshopPreset, let dependency = project.dependency else {
+                return WEWallpaper(using: project, where: url)
+            }
+
+            let dependencyID = dependency.rawValue
+            guard dependencyID != url.lastPathComponent, !visited.contains(dependencyID) else {
+                return WEWallpaper(using: project, where: url, presetDependency: dependency, presetStatus: .circularDependency)
+            }
+            let dependencyDirectories = WallpaperLibrary.shared.workshopItemDirectories(for: dependencyID)
+            guard !dependencyDirectories.isEmpty else {
+                return WEWallpaper(using: project, where: url, presetDependency: dependency, presetStatus: .missingDependency)
+            }
+            var foundCircularDependency = false
+            for dependencyDirectory in dependencyDirectories {
+                let base = load(from: dependencyDirectory, visited: visited.union([url.lastPathComponent]))
+                guard base.isValid,
+                      base.kind != .unsupported,
+                      FileManager.default.fileExists(atPath: base.resolvedEntryURL.path) else {
+                    foundCircularDependency = foundCircularDependency || base.presetStatus == .circularDependency
+                    continue
+                }
+                var effectiveProject = base.project.applyingPreset(project)
+                effectiveProject.workshopid = project.workshopid ?? WorkshopId(rawValue: url.lastPathComponent)
+                return WEWallpaper(
+                    using: effectiveProject,
+                    where: url,
+                    renderDirectory: base.renderDirectory,
+                    assetOverlayDirectories: [url] + base.assetOverlayDirectories,
+                    presetDependency: dependency,
+                    presetStatus: .resolved
+                )
+            }
+            let status: WEPresetStatus = foundCircularDependency ? .circularDependency : .invalidDependency
+            return WEWallpaper(using: project, where: url, presetDependency: dependency, presetStatus: status)
         }
         return WEWallpaper(using: .invalid, where: url)
     }
+
+    @discardableResult
+    func updateStoredMetadata(title: String? = nil, tags: [String]? = nil) -> WEWallpaper? {
+        let url = wallpaperDirectory.appending(path: "project.json")
+        guard let data = try? Data(contentsOf: url),
+              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if let title { object["title"] = title }
+        if let tags { object["tags"] = tags }
+        guard let updated = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        do {
+            try updated.write(to: url, options: .atomic)
+            return Self.load(from: wallpaperDirectory)
+        } catch {
+            return nil
+        }
+    }
+}
+
+enum WEPresetStatus: String, Codable {
+    case notPreset
+    case resolved
+    case missingDependency
+    case invalidDependency
+    case circularDependency
 }
 
 // MARK: - 排序

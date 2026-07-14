@@ -133,6 +133,23 @@ struct ContentView: View {
             Text("确定要删除“\(viewModel.hoveredWallpaper?.project.title ?? "该壁纸")”吗？")
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
+        .alert(
+            "需要基础壁纸",
+            isPresented: Binding(
+                get: { workshopViewModel.presetDependencyPrompt != nil },
+                set: { if !$0 { workshopViewModel.dismissPresetDependencyPrompt() } }
+            ),
+            presenting: workshopViewModel.presetDependencyPrompt
+        ) { prompt in
+            Button("一起下载") {
+                workshopViewModel.confirmPresetDependencyDownload(prompt)
+            }
+            Button("暂不", role: .cancel) {
+                workshopViewModel.dismissPresetDependencyPrompt()
+            }
+        } message: { prompt in
+            Text(prompt.message)
+        }
         .sheet(isPresented: $globalSettingsViewModel.isFirstLaunch) {
             FirstLaunchView()
                 .environmentObject(globalSettingsViewModel)

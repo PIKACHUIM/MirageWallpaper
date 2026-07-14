@@ -24,7 +24,7 @@ struct DiscoverBannerView: View {
                             .opacity(index == currentIndex ? 1 : 0)
                             .animation(.easeInOut(duration: 0.5), value: currentIndex)
                             .onTapGesture {
-                                workshopViewModel.selectedItem = item
+                                workshopViewModel.selectWorkshopItem(item)
                             }
                     }
                 }
@@ -126,7 +126,7 @@ struct BannerCard: View {
                     HStack(spacing: 12) {
                         Label(item.formattedSubscriptions, systemImage: "arrow.down.circle.fill")
                         Label(item.formattedViews, systemImage: "eye.fill")
-                        Label(item.kind.displayName, systemImage: "tag.fill")
+                        Label(item.displayTypeName, systemImage: "tag.fill")
                     }
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.85))

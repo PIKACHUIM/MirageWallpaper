@@ -92,6 +92,15 @@ struct WorkshopItemDetail: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
 
+                if item.isPreset {
+                    Label("创意工坊预设：需要对应的基础壁纸", systemImage: "slider.horizontal.3")
+                        .font(.caption.bold())
+                        .foregroundStyle(.purple)
+                        .padding(8)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                }
+
                 HStack(spacing: 16) {
                     StatView(icon: "arrow.down.circle.fill", value: item.formattedSubscriptions, label: "订阅")
                     StatView(icon: "heart.fill", value: item.formattedFavorited, label: "收藏")
@@ -99,7 +108,7 @@ struct WorkshopItemDetail: View {
                 }
 
                 HStack(spacing: 12) {
-                    Label(item.kind.displayName, systemImage: "tag.fill")
+                    Label(item.displayTypeName, systemImage: "tag.fill")
                     Label(item.formattedFileSize, systemImage: "doc.fill")
                 }
                 .font(.caption)
@@ -173,10 +182,23 @@ struct WorkshopItemDetail: View {
     @ViewBuilder
     func downloadSection(for item: WorkshopItem) -> some View {
         let hasDownloadTask = workshopViewModel.downloadState(for: item.publishedFileId) != nil
-        let isDownloaded = !hasDownloadTask && SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
-        if isDownloaded {
+        let installed = workshopViewModel.installedItem(workshopId: item.publishedFileId)
+        if let installed, installed.needsPresetDependency {
+            VStack(spacing: 6) {
+                Text("预设已下载，但缺少基础壁纸 \(installed.presetDependency?.rawValue ?? "")")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Button {
+                    workshopViewModel.requestPresetDependency(for: installed)
+                } label: {
+                    Label("下载基础壁纸", systemImage: "square.stack.3d.up.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        } else if !hasDownloadTask, installed?.isValid == true {
             Button { } label: {
-                Label("已下载", systemImage: "checkmark.circle.fill")
+                Label(item.isPreset ? "预设已安装" : "已下载", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -266,7 +288,7 @@ struct WorkshopItemDetail: View {
             Button {
                 workshopViewModel.downloadItem(item)
             } label: {
-                Label("下载壁纸", systemImage: "arrow.down.circle.fill")
+                Label(item.isPreset ? "下载预设" : "下载壁纸", systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

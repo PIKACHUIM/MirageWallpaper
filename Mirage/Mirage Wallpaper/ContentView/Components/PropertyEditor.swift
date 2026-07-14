@@ -23,7 +23,7 @@ struct PropertyEditor: View {
     }
 
     private var sortedProperties: [(key: String, property: WEProjectProperty)] {
-        wallpaper.project.general?.properties?.sorted ?? []
+        (wallpaper.project.general?.properties?.sorted ?? []).filter { !$0.property.isPresetOnly }
     }
 
     private var visibleProperties: [(key: String, property: WEProjectProperty)] {

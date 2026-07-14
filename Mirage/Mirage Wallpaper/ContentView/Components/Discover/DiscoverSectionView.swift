@@ -43,11 +43,16 @@ struct DiscoverSectionView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(items) { item in
+                        let isDownloaded = SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
+                        let installed = item.isPreset && isDownloaded
+                            ? workshopViewModel.installedItem(workshopId: item.publishedFileId)
+                            : nil
                         DiscoverCard(
                             item: item,
                             isHovered: hoveredId == item.id,
                             isSelected: workshopViewModel.selectedItem?.id == item.id,
-                            isDownloaded: SteamWebAPI.shared.isItemDownloaded(item.publishedFileId),
+                            isDownloaded: isDownloaded,
+                            presetNeedsDependency: installed?.needsPresetDependency == true,
                             downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
                         )
                         .onHover { hovered in
@@ -71,6 +76,7 @@ struct DiscoverCard: View {
     var isHovered: Bool
     var isSelected: Bool
     var isDownloaded: Bool
+    var presetNeedsDependency: Bool
     var downloadState: DownloadState?
 
     var body: some View {
@@ -102,13 +108,25 @@ struct DiscoverCard: View {
                 .clipped()
 
                 if isDownloaded {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.white, .green)
+                    Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(.white, presetNeedsDependency ? .orange : .green)
                         .symbolRenderingMode(.palette)
                         .font(.caption)
                         .padding(6)
                 } else if let state = downloadState {
                     downloadStateIndicator(state)
+                        .padding(6)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if item.isPreset {
+                    Text("预设")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.purple)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         .padding(6)
                 }
             }
@@ -121,7 +139,7 @@ struct DiscoverCard: View {
 
                 HStack(spacing: 8) {
                     Label(item.formattedSubscriptions, systemImage: "arrow.down.circle")
-                    Label(item.kind.displayName, systemImage: "tag")
+                    Label(item.displayTypeName, systemImage: "tag")
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)

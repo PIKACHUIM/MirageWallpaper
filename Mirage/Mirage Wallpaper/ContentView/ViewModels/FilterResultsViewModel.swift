@@ -40,14 +40,17 @@ struct FRType: FilterResultsModel {
         "场景",
         "视频",
         "网页",
-        "应用程序"
+        "应用程序",
+        "预设"
     ]
     static let scene            = FRType(rawValue: 1 << 0)
     static let video            = FRType(rawValue: 1 << 1)
     static let web              = FRType(rawValue: 1 << 2)
     static let application      = FRType(rawValue: 1 << 3)
+    static let preset           = FRType(rawValue: 1 << 4)
     
-    static let all: FRType      = [.scene, .video, .web, .application]
+    static let legacyAll        = FRType(rawValue: 0b1111)
+    static let all: FRType      = [.scene, .video, .web, .application, .preset]
     static let none: FRType     = []
 }
 

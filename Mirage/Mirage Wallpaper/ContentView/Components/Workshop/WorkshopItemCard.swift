@@ -10,6 +10,7 @@ struct WorkshopItemCard: View {
     var item: WorkshopItem
     var isHovered: Bool
     var isDownloaded: Bool
+    var presetNeedsDependency: Bool
     var downloadState: DownloadState?
 
     var body: some View {
@@ -40,23 +41,35 @@ struct WorkshopItemCard: View {
                 }
                 .frame(minHeight: 120)
 
-                if let state = downloadState {
+                if let state = downloadState, !(presetNeedsDependency && state == .completed) {
                     downloadBadge(state)
                         .padding(6)
                 } else if isDownloaded {
                     HStack(spacing: 3) {
-                        Image(systemName: "checkmark")
+                        Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark")
                             .font(.caption2)
                             .bold()
-                        Text("已下载")
+                        Text(presetNeedsDependency ? "缺少基础壁纸" : "已下载")
                             .font(.caption2)
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(.green)
+                    .background(presetNeedsDependency ? .orange : .green)
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .padding(6)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if item.isPreset {
+                    Label("预设", systemImage: "slider.horizontal.3")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.purple)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .padding(6)
                 }
             }
 
@@ -80,7 +93,7 @@ struct WorkshopItemCard: View {
                             Label(item.formattedSubscriptions, systemImage: "arrow.down.circle")
                             Label(item.formattedViews, systemImage: "eye")
 
-                            Text(item.kind.displayName)
+                            Text(item.displayTypeName)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                                 .background(kindColor.opacity(0.8))

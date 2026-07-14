@@ -1215,6 +1215,21 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             return "下载未完成：未找到 project.json"
         }
         let wallpaper = WEWallpaper.load(from: directory)
+        if wallpaper.isPreset {
+            switch wallpaper.presetStatus {
+            case .resolved:
+                guard fm.fileExists(atPath: wallpaper.resolvedEntryURL.path) else {
+                    return "下载内容不完整：基础壁纸缺少主文件"
+                }
+                return nil
+            case .missingDependency, .invalidDependency:
+                return nil
+            case .circularDependency:
+                return "预设包含循环依赖"
+            case .notPreset:
+                break
+            }
+        }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else {
             return "下载内容无效或壁纸类型不受支持"
         }

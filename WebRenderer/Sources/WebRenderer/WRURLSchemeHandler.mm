@@ -43,25 +43,37 @@ static NSString *MIMEForExtension(NSString *ext) {
     self = [super init];
     if (self) {
         _baseDirectory = [[baseDirectory stringByStandardizingPath] copy];
+        _overlayDirectories = @[];
         _ioQueue = dispatch_queue_create("WebRenderer.schemeHandler", DISPATCH_QUEUE_SERIAL);
     }
     return self;
 }
 
-// Resolve `relative` against base, refusing anything that escapes the base.
-- (nullable NSString *)safePathForRelative:(NSString *)relative {
+- (nullable NSString *)safePathForRelative:(NSString *)relative inDirectory:(NSString *)directory {
     if (relative.length == 0) return nil;
     while (relative.length > 0 && [relative characterAtIndex:0] == '/') {
         relative = [relative substringFromIndex:1];
     }
-    NSString *combined = [_baseDirectory stringByAppendingPathComponent:relative];
-    NSString *standardized = [combined stringByStandardizingPath];
-    NSString *base = _baseDirectory;
+    NSString *base = [[directory stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *combined = [base stringByAppendingPathComponent:relative];
+    NSString *standardized = [[combined stringByStandardizingPath] stringByResolvingSymlinksInPath];
     if (![standardized isEqualToString:base] &&
         ![standardized hasPrefix:[base stringByAppendingString:@"/"]]) {
         return nil;
     }
     return standardized;
+}
+
+- (nullable NSString *)resolvedPathForRelative:(NSString *)relative {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    for (NSString *overlay in _overlayDirectories) {
+        NSString *candidate = [self safePathForRelative:relative inDirectory:overlay];
+        BOOL isDirectory = NO;
+        if (candidate != nil && [fm fileExistsAtPath:candidate isDirectory:&isDirectory] && !isDirectory) {
+            return candidate;
+        }
+    }
+    return [self safePathForRelative:relative inDirectory:_baseDirectory];
 }
 
 #pragma mark - WKURLSchemeHandler
@@ -70,7 +82,7 @@ static NSString *MIMEForExtension(NSString *ext) {
     (void)webView;
     NSString *rawPath = task.request.URL.path ?: @"";
     NSString *rel = [rawPath stringByRemovingPercentEncoding] ?: rawPath;
-    NSString *filePath = [self safePathForRelative:rel];
+    NSString *filePath = [self resolvedPathForRelative:rel];
 
     if (filePath == nil) { [self respondNotFound:task]; return; }
 

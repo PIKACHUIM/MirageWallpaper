@@ -167,19 +167,24 @@ class ContentViewModel: ObservableObject, DropDelegate {
             }
             
             var type = FRType.none
-            switch wallpaper.project.type.lowercased() {
-            case "video":
-                type = .video
-            case "scene":
-                type = .scene
-            case "web":
-                type = .web
-            case "application":
-                type = .application
-            default:
-                break
+            if wallpaper.isPreset {
+                type = .preset
+            } else {
+                switch wallpaper.project.type.lowercased() {
+                case "video":
+                    type = .video
+                case "scene":
+                    type = .scene
+                case "web":
+                    type = .web
+                case "application":
+                    type = .application
+                default:
+                    break
+                }
             }
-            guard self.type.contains(type) else { return false }
+            let selectedTypes = self.type == .legacyAll ? FRType.all : self.type
+            guard selectedTypes.contains(type) else { return false }
             
             var ageRating: FRAgeRating
             switch wallpaper.project.contentrating {

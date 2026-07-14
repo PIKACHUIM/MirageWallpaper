@@ -220,7 +220,10 @@ final class RendererController {
             }
 
         case .web:
-            args += [wallpaper.wallpaperDirectory.path]
+            args += [wallpaper.renderDirectory.path]
+            for overlay in wallpaper.assetOverlayDirectories {
+                args += ["--asset-overlay", overlay.path]
+            }
             args += ["--fps", String(options.fps)]
             args += ["--volume", String(format: "%.3f", options.muted ? 0 : options.volume)]
             args += ["--screen", String(screenIndex)]
@@ -228,7 +231,7 @@ final class RendererController {
             args += ["--control-stdin"]
 
         case .video:
-            args += [wallpaper.wallpaperDirectory.path]
+            args += [wallpaper.renderDirectory.path]
             args += ["--screen", String(screenIndex)]
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--fill", options.fillMode.rawValue]
@@ -330,6 +333,14 @@ final class RendererController {
 
     var activeScreens: [Int] {
         queue.sync { Array(running.keys).sorted() }
+    }
+
+    var processIdentifiers: Set<pid_t> {
+        queue.sync {
+            Set(running.values.compactMap { handle in
+                handle.process.isRunning ? handle.process.processIdentifier : nil
+            })
+        }
     }
 
     // MARK: Live control (broadcast or per-screen)

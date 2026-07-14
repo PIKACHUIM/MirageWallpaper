@@ -15,6 +15,7 @@ typedef struct {
     float initialVolume;             // master volume 0..1 (applied via "audio" property)
     int  frameRate;                  // target fps (0 or ≥60 ⇒ no throttle)
     NSString *_Nullable userAgent;   // nil ⇒ Chrome-on-mac default
+    NSArray<NSString *> *_Nullable assetOverlayDirectories;
 } WREngineConfig;
 
 // Owns a WKWebView and implements the Wallpaper Engine web-wallpaper host
@@ -48,6 +49,7 @@ typedef struct {
 
 // Master volume: applies the "audio" property + mutes/unmutes registered streams.
 - (void)setVolume:(float)volume;
+- (void)setMuted:(BOOL)muted;
 
 // Injects a requestAnimationFrame throttle shim when fps < 60 (no native
 // equivalent of CEF's SetWindowlessFrameRate).

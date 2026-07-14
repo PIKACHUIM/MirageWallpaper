@@ -17,6 +17,15 @@ struct WallpaperRuntimeState: Codable, Equatable {
 class WallpaperViewModel: ObservableObject {
     let renderer = RendererController()
 
+    private struct AppliedPlaybackState: Equatable {
+        let paused: Bool
+        let muted: Bool
+        let volume: Float
+        let speed: Float
+    }
+
+    private var lastAppliedPlaybackState: AppliedPlaybackState?
+
     static var invalidWallpaper: WEWallpaper {
         WEWallpaper(using: .invalid,
                     where: Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")
@@ -52,7 +61,7 @@ class WallpaperViewModel: ObservableObject {
             lastPlayRate = oldValue
             guard !suppressPlaybackSideEffects else { return }
             runtime.speed = playRate
-            if playRate == 0 { renderer.pause() } else { renderer.resume(); renderer.setSpeed(playRate) }
+            applyPlaybackPolicy(currentPlaybackPolicy)
             saveRuntime()
         }
     }
@@ -64,8 +73,7 @@ class WallpaperViewModel: ObservableObject {
             lastPlayVolume = oldValue
             guard !suppressPlaybackSideEffects else { return }
             runtime.volume = playVolume
-            renderer.setVolume(playVolume * masterVolume)
-            renderer.setMuted(playVolume == 0 || globalMuted)
+            applyPlaybackPolicy(currentPlaybackPolicy)
             saveRuntime()
         }
     }
@@ -74,7 +82,7 @@ class WallpaperViewModel: ObservableObject {
         if let json = UserDefaults.standard.data(forKey: "CurrentWallpaper"),
            let wallpaper = try? JSONDecoder().decode(WEWallpaper.self, from: json),
            FileManager.default.fileExists(atPath: wallpaper.wallpaperDirectory.path) {
-            currentWallpaper = wallpaper
+            currentWallpaper = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
         } else {
             currentWallpaper = WallpaperViewModel.invalidWallpaper
         }
@@ -93,6 +101,9 @@ class WallpaperViewModel: ObservableObject {
     }
     private var enableSpectrum: Bool {
         AppDelegate.shared.globalSettingsViewModel.settings.enableSpectrum
+    }
+    private var currentPlaybackPolicy: GSPlayback {
+        AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction
     }
 
     // MARK: 信任（网页壁纸安全确认）
@@ -141,14 +152,37 @@ class WallpaperViewModel: ObservableObject {
                 result[key] = prop
             }
         }
+        if w.kind == .scene, !w.assetOverlayDirectories.isEmpty {
+            for (key, var property) in result where property.propertyType == .file ||
+                property.propertyType == .scenetexture || property.propertyType == .directory {
+                let path = property.value.stringValue
+                guard !path.isEmpty, !(path as NSString).isAbsolutePath else { continue }
+                if let resolved = resolvedPresetAsset(path, in: w.assetOverlayDirectories) {
+                    property.value = .string(resolved.path)
+                    result[key] = property
+                }
+            }
+        }
         return result
+    }
+
+    private func resolvedPresetAsset(_ relativePath: String, in directories: [URL]) -> URL? {
+        for directory in directories {
+            let root = directory.standardizedFileURL.resolvingSymlinksInPath()
+            let candidate = root.appending(path: relativePath).standardizedFileURL.resolvingSymlinksInPath()
+            let isInside = candidate.path == root.path || candidate.path.hasPrefix(root.path + "/")
+            if isInside, FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private func makeRenderOptions(for w: WEWallpaper) -> RenderOptions {
         var opts = RenderOptions()
         opts.fps = globalFps
         opts.enableSpectrum = enableSpectrum
-        opts.muted = runtime.muted || globalMuted || runtime.volume == 0
+        opts.muted = runtime.muted || globalMuted || runtime.volume == 0 || currentPlaybackPolicy == .mute
         opts.volume = runtime.volume * masterVolume
         opts.speed = runtime.speed
         opts.fillMode = runtime.fillMode
@@ -171,6 +205,7 @@ class WallpaperViewModel: ObservableObject {
         suppressPlaybackSideEffects = false
         let opts = makeRenderOptions(for: w)
         renderer.render(w, on: 0, options: opts)
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
         AppDelegate.shared.setPlaceholderWallpaper(with: w)
     }
 
@@ -183,6 +218,7 @@ class WallpaperViewModel: ObservableObject {
         playRate = runtime.speed
         suppressPlaybackSideEffects = false
         renderer.render(w, on: 0, options: makeRenderOptions(for: w))
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
 
     func applyToAllScreens() {
@@ -198,6 +234,7 @@ class WallpaperViewModel: ObservableObject {
             opts.fillMode = runtime.fillMode
             renderer.render(w, on: screen, options: opts)
         }
+        applyPlaybackPolicy(currentPlaybackPolicy, force: true)
     }
 
     func stopWallpaper() {
@@ -217,6 +254,7 @@ class WallpaperViewModel: ObservableObject {
             opts.speed = saved.speed
             opts.fillMode = saved.fillMode
             renderer.render(w, on: screen, options: opts)
+            applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: screen)
         }
     }
 
@@ -255,8 +293,46 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func reapplyVolume() {
-        renderer.setVolume(runtime.volume * masterVolume)
-        renderer.setMuted(runtime.muted || globalMuted || runtime.volume == 0)
+        applyPlaybackPolicy(currentPlaybackPolicy)
+    }
+
+    func applyPlaybackPolicy(_ action: GSPlayback, force: Bool = false) {
+        let state = AppliedPlaybackState(
+            paused: playRate == 0 || action == .pause || action == .stop,
+            muted: runtime.muted || globalMuted || runtime.volume == 0 || action == .mute,
+            volume: runtime.volume * masterVolume,
+            speed: playRate
+        )
+        guard force || state != lastAppliedPlaybackState else { return }
+
+        if state.paused {
+            renderer.pause()
+            renderer.setVolume(state.volume)
+            renderer.setMuted(state.muted)
+        } else {
+            renderer.setVolume(state.volume)
+            renderer.setMuted(state.muted)
+            renderer.setSpeed(state.speed)
+            renderer.resume()
+        }
+        lastAppliedPlaybackState = state
+    }
+
+    private func applyPlaybackPolicy(_ action: GSPlayback, runtime: WallpaperRuntimeState, on screen: Int) {
+        let paused = runtime.speed == 0 || action == .pause || action == .stop
+        let muted = runtime.muted || globalMuted || runtime.volume == 0 || action == .mute
+        let volume = runtime.volume * masterVolume
+
+        if paused {
+            renderer.pause(on: screen)
+            renderer.setVolume(volume, on: screen)
+            renderer.setMuted(muted, on: screen)
+        } else {
+            renderer.setVolume(volume, on: screen)
+            renderer.setMuted(muted, on: screen)
+            renderer.setSpeed(runtime.speed, on: screen)
+            renderer.resume(on: screen)
+        }
     }
 
     // MARK: 状态栏菜单项文字同步（保留原 UI 行为）

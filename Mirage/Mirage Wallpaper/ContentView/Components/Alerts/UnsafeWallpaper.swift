@@ -41,7 +41,7 @@ struct UnsafeWallpaper: View {
                     .frame(maxWidth: 100)
                 VStack(alignment: .leading, spacing: 10) {
                     Text("你即将把以下\(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知来源")类文件作为壁纸运行：")
-                    Text("\(wallpaper.wallpaperDirectory.path(percentEncoded: false) + wallpaper.project.file)").bold()
+                    Text(wallpaper.resolvedEntryURL.path(percentEncoded: false)).bold()
                     Text("Mirage 无法控制该文件的行为，网页壁纸可能包含可执行脚本。请确认它来自可信来源后再继续。")
                     Text(seconds > 0 ? "请等待 \(seconds) 秒。" : "请注意潜在的恶意代码风险。")
                     Toggle("对此壁纸不再提示", isOn: $isIgnored)
