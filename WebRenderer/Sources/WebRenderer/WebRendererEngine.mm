@@ -335,9 +335,15 @@ static NSString *const kDefaultUserAgent =
 
 - (void)setVolume:(float)volume {
     _volume = volume;
-    _muted = (volume <= 0.0f);
     [self applyUserProperty:@"audio" value:@{@"value": @(volume)}];
-    [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", _muted ? @"true" : @"false"]];
+    BOOL effectiveMuted = _muted || volume <= 0.0f;
+    [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
+}
+
+- (void)setMuted:(BOOL)muted {
+    _muted = muted;
+    BOOL effectiveMuted = muted || _volume <= 0.0f;
+    [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
 }
 
 - (void)setFrameRate:(int)fps {

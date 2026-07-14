@@ -199,7 +199,7 @@ int main(int argc, char *argv[]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {
                         if ([value isKindOfClass:[NSNumber class]]) {
-                            [eng setVolume:[value boolValue] ? 0.0f : 1.0f];
+                            [eng setMuted:[value boolValue]];
                         }
                     } else if ([name isEqualToString:@"fps"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setFrameRate:[value intValue]];

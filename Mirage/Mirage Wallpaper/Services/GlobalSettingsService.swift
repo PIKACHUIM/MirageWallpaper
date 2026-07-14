@@ -207,10 +207,12 @@ class GlobalSettingsViewModel: ObservableObject {
         }
 
         self.validate()
+        self.evaluatePlaybackState()
     }
 
     private var displayAsleep = false
     private var playbackEvalTimer: Timer?
+    private(set) var effectivePlaybackAction = GSPlayback.keepRunning
 
     @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
     @objc private func displayDidWake()  { displayAsleep = false; evaluatePlaybackState() }
@@ -305,7 +307,6 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     func evaluatePlaybackState() {
-        let renderer = AppDelegate.shared.wallpaperViewModel.renderer
         var actions: [GSPlayback] = []
 
         if displayAsleep { actions.append(settings.displayAsleep) }
@@ -313,13 +314,12 @@ class GlobalSettingsViewModel: ObservableObject {
         if isOnBattery() { actions.append(settings.laptopOnBattery) }
 
         let front = NSWorkspace.shared.frontmostApplication
-        let isSelf = front?.bundleIdentifier == Bundle.main.bundleIdentifier
-        // Finder 同时托管桌面，仅当它没有任何可见真实窗口时
+        let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
-            && !frontmostAppHasVisibleWindows()
+            && !appHasVisibleWindows(pid: front?.processIdentifier)
 
-        if !isSelf && !isDesktopFinder {
-            if frontAppIsFullscreen() {
+        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder {
+            if appIsFullscreen(pid: front.processIdentifier) {
                 actions.append(settings.otherApplicationFullscreen)
             } else {
                 actions.append(settings.otherApplicationFocused)
@@ -330,27 +330,8 @@ class GlobalSettingsViewModel: ObservableObject {
             actions.append(settings.otherApplicationPlayingAudio)
         }
 
-        let effective = strongestAction(actions)
-        switch effective {
-        case .pause, .stop:
-            renderer.pause()
-        case .mute:
-            if AppDelegate.shared.wallpaperViewModel.playRate == 0 {
-                renderer.pause()
-            } else {
-                renderer.resume()
-            }
-            renderer.setMuted(true)
-        case .keepRunning:
-            // Do not let the periodic policy evaluator immediately undo a
-            // deliberate pause from the menu-bar control.
-            if AppDelegate.shared.wallpaperViewModel.playRate == 0 {
-                renderer.pause()
-            } else {
-                renderer.resume()
-                AppDelegate.shared.wallpaperViewModel.reapplyVolume()
-            }
-        }
+        effectivePlaybackAction = strongestAction(actions)
+        AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicy(effectivePlaybackAction)
     }
 
     private func strongestAction(_ actions: [GSPlayback]) -> GSPlayback {
@@ -372,30 +353,58 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     private func isOtherAppPlayingAudio() -> Bool {
-        var deviceID = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var size: UInt32 = 0
         var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mSelector: kAudioHardwarePropertyProcessObjectList,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID) == noErr,
-              deviceID != 0 else { return false }
+        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return false }
+
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        guard count > 0 else { return false }
+        var processes = [AudioObjectID](repeating: kAudioObjectUnknown, count: count)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &processes) == noErr else { return false }
+
+        var excludedPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
+        excludedPIDs.insert(ProcessInfo.processInfo.processIdentifier)
+
+        for process in processes {
+            guard audioProcessIsRunningOutput(process),
+                  let pid = audioProcessPID(process),
+                  !excludedPIDs.contains(pid) else { continue }
+            return true
+        }
+        return false
+    }
+
+    private func audioProcessIsRunningOutput(_ process: AudioObjectID) -> Bool {
         var running: UInt32 = 0
-        var rsize = UInt32(MemoryLayout<UInt32>.size)
-        var raddr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningOutput,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(deviceID, &raddr, 0, nil, &rsize, &running) == noErr else { return false }
+        guard AudioObjectGetPropertyData(process, &addr, 0, nil, &size, &running) == noErr else { return false }
         return running != 0
     }
 
-    private func frontAppIsFullscreen() -> Bool {
+    private func audioProcessPID(_ process: AudioObjectID) -> pid_t? {
+        var pid: pid_t = 0
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(process, &addr, 0, nil, &size, &pid) == noErr else { return nil }
+        return pid
+    }
+
+    private func appIsFullscreen(pid: pid_t) -> Bool {
         guard let main = NSScreen.main else { return false }
         let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        guard let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
         for info in infoList {
-            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == frontPid,
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid,
                   let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
             if bounds.width >= main.frame.width - 1 && bounds.height >= main.frame.height - 1 {
@@ -405,12 +414,11 @@ class GlobalSettingsViewModel: ObservableObject {
         return false
     }
 
-    /// 用于区分"Finder 作为桌面"与"Finder 打开了访达窗口"。
-    private func frontmostAppHasVisibleWindows() -> Bool {
-        guard let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+    private func appHasVisibleWindows(pid: pid_t?) -> Bool {
+        guard let pid else { return false }
         let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         for info in infoList {
-            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == frontPid,
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid,
                   let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
             if bounds.width > 0 && bounds.height > 0 {

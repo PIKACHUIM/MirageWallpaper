@@ -48,6 +48,7 @@ typedef struct {
 
 // Master volume: applies the "audio" property + mutes/unmutes registered streams.
 - (void)setVolume:(float)volume;
+- (void)setMuted:(BOOL)muted;
 
 // Injects a requestAnimationFrame throttle shim when fps < 60 (no native
 // equivalent of CEF's SetWindowlessFrameRate).

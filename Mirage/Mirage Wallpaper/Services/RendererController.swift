@@ -247,6 +247,14 @@ final class RendererController {
         queue.sync { Array(running.keys).sorted() }
     }
 
+    var processIdentifiers: Set<pid_t> {
+        queue.sync {
+            Set(running.values.compactMap { handle in
+                handle.process.isRunning ? handle.process.processIdentifier : nil
+            })
+        }
+    }
+
     // MARK: 实时控制（广播到所有屏，或指定屏）
 
     private func forEach(_ screenIndex: Int?, _ body: (RendererProcess) -> Void) {
