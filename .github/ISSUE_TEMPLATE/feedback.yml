@@ -1,0 +1,154 @@
+name: "问题反馈 / Feedback"
+description: "报告错误、兼容性问题或提出改进建议 / Report a bug, compatibility issue, or suggestion"
+title: "[反馈] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你帮助改进 Mirage。请尽量完整地填写以下内容，清晰的信息能显著加快问题定位。
+
+        Mirage 仍处于早期阶段。提交前请先搜索已有 Issue；你也可以加入 **QQ 交流群 2160040437** 交流。
+
+        Thank you for helping improve Mirage. Please provide enough detail for the issue to be reproduced and investigated.
+
+  - type: checkboxes
+    id: preparation
+    attributes:
+      label: "提交前确认 / Before submitting"
+      options:
+        - label: "我已搜索现有 Issue，确认没有相同或高度相似的问题。 / I searched existing issues for duplicates."
+          required: true
+        - label: "我已确认所用版本不是明显过时的版本。 / I confirmed that my Mirage version is not clearly outdated."
+          required: true
+        - label: "我不会提交 Steam 密码、Steam Web API Key、Cookie 或其他敏感信息。 / I will not include passwords, API keys, cookies, or other secrets."
+          required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: "问题类型 / Category"
+      description: "请选择最接近的一项。 / Choose the closest category."
+      options:
+        - "Steam 创意工坊浏览或 API / Workshop browsing or API"
+        - "SteamCMD 安装、登录或 Steam Guard / SteamCMD installation, login, or Steam Guard"
+        - "壁纸下载、导入或管理 / Wallpaper download, import, or management"
+        - "场景壁纸播放或兼容性 / Scene wallpaper playback or compatibility"
+        - "网页壁纸播放或兼容性 / Web wallpaper playback or compatibility"
+        - "视频壁纸播放或兼容性 / Video wallpaper playback or compatibility"
+        - "界面、设置或系统集成 / UI, settings, or system integration"
+        - "崩溃、卡顿或资源占用 / Crash, performance, or resource usage"
+        - "功能建议 / Feature request"
+        - "其他 / Other"
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: "Mirage 版本 / Mirage version"
+      description: "可在“关于 Mirage”中查看。 / Available in About Mirage."
+      placeholder: "例如 / Example: 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: "macOS 版本 / macOS version"
+      placeholder: "例如 / Example: macOS 15.5"
+    validations:
+      required: true
+
+  - type: input
+    id: mac-model
+    attributes:
+      label: "Mac 型号 / Mac model"
+      description: "请提供型号与大致年份。 / Include the model and approximate year."
+      placeholder: "例如 / Example: MacBook Pro 16-inch, 2019"
+    validations:
+      required: true
+
+  - type: input
+    id: wallpaper
+    attributes:
+      label: "相关壁纸 / Related wallpaper"
+      description: "如果问题与特定壁纸有关，请提供名称、类型、来源链接或 Steam Workshop ID。 / For wallpaper-specific issues, include its name, type, source URL, or Workshop ID."
+      placeholder: "名称、scene/web/video、链接或 Workshop ID"
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: "问题概述 / Summary"
+      description: "用几句话说明发生了什么，以及它对使用造成了什么影响。 / Briefly explain what happened and how it affects you."
+      placeholder: "请避免只写“不能用”“有问题”或只放一张截图。"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: "复现步骤 / Steps to reproduce"
+      description: "请从启动 Mirage 开始，按顺序列出可以稳定触发问题的操作。功能建议请描述使用场景与当前流程。 / List the exact actions that reproduce the issue. For a feature request, describe the use case and current workflow."
+      placeholder: |
+        1. 打开 Mirage……
+        2. 进入……
+        3. 点击……
+        4. 出现……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "预期结果 / Expected behavior"
+      description: "你认为正确的结果应该是什么？ / What should happen instead?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "实际结果 / Actual behavior"
+      description: "实际发生了什么？请写出完整提示文字，不要只写“失败”。 / What actually happened? Include the complete error message when available."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: "出现频率 / Frequency"
+      options:
+        - "每次都出现 / Always"
+        - "经常出现 / Often"
+        - "偶尔出现 / Intermittently"
+        - "仅出现一次 / Once"
+        - "不适用 / Not applicable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "相关日志 / Relevant logs"
+      description: "请粘贴问题发生前后的相关日志，并删除账号、路径中的个人信息及任何密钥。 / Paste relevant logs and remove personal information and all secrets."
+      render: shell
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: "截图或录屏 / Screenshots or recordings"
+      description: "可直接拖入文件。请遮挡 Steam 账号、邮箱、用户名和其他隐私信息。 / Drag files here and redact account details or other private information."
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: "补充信息 / Additional context"
+      description: "例如是否使用 SteamCF、问题是否在重启后持续、最近是否更改过设置。 / For example, whether SteamCF is enabled, whether a restart changes the result, or which settings were recently changed."
+
+  - type: checkboxes
+    id: final-check
+    attributes:
+      label: "最终确认 / Final confirmation"
+      options:
+        - label: "我已提供足够的信息，并愿意在需要时继续补充与测试。 / I provided sufficient information and can help with follow-up testing."
+          required: true
