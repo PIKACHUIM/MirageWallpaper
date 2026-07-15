@@ -32,22 +32,26 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.isMovableByWindowBackground = true
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
 
-        let hostingView = NSHostingView(rootView: ContentView(
+        // 使用 NSHostingController 作为 contentViewController，而非将
+        // NSHostingView 直接设为 contentView。
+        //
+        // 根因: NSHostingView 直接作为窗口 contentView 时，其在每次 SwiftUI
+        // graph 变更时对 setNeedsUpdateConstraints 的调用会直接进入窗口的
+        // display-cycle 约束更新 pass。当窗口内含 HSplitView + 多个相互
+        // 依赖的 @ObservedObject（本项目在引入第 4 个 rmskinViewModel 后
+        // 依赖图更易抖动）时，会在初始 display cycle 形成
+        // updateConstraints ↔ setNeedsUpdateConstraints 无限循环
+        // (表现为窗口高度 668↔669 1px 振荡)。
+        //
+        // NSHostingController 由 AppKit 托管其 hosting view 的生命周期与
+        // 约束集成，走独立的布局路径，可规避该循环。
+        let hostingController = NSHostingController(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        // 关键修复: 禁用 NSHostingView 基于 SwiftUI 内容尺寸自动生成/更新
-        // Auto Layout 约束的行为。默认情况下 NSHostingView 会根据内容的
-        // intrinsicContentSize/minSize 等在每次 graph change 时更新约束，
-        // 当窗口内含 TextField / .background 等桥接 AppKit 的子视图时，
-        // 会在 display cycle 中形成 setNeedsUpdateConstraints 无限循环。
-        // 设为 [] 后改由 autoresizingMask 驱动尺寸，彻底切断循环。
-        hostingView.sizingOptions = []
-        hostingView.translatesAutoresizingMaskIntoConstraints = true
-        hostingView.autoresizingMask = [.width, .height]
-        hostingView.frame = NSRect(origin: .zero, size: self.window.contentLayoutRect.size)
-        self.window.contentView = hostingView
+        hostingController.sizingOptions = []
+        self.window.contentViewController = hostingController
     }
     
     required init?(coder: NSCoder) {
