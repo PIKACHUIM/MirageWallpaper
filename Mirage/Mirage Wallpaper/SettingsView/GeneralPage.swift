@@ -39,6 +39,75 @@ struct GeneralPage: SettingsPage {
         }
     }
 
+    @ViewBuilder
+    private func librarySourceRow(_ source: WallpaperLibrarySource) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(source.title).font(.callout)
+                if source.role == .managedSteamCMD {
+                    Text("当前下载位置")
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.15))
+                        .clipShape(Capsule())
+                } else if !source.exists {
+                    Text("尚未创建")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(source.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(source.url.path(percentEncoded: false))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            HStack {
+                if source.role == .steam || source.role == .customSteam {
+                    Button("选择目录…") {
+                        chooseDirectory(message: "选择 Wallpaper Engine 创意工坊壁纸所在目录（431960）") { url in
+                            WallpaperLibrary.shared.setWorkshopDirectory(url)
+                            pathRefresh += 1
+                            AppDelegate.shared.contentViewModel.refresh()
+                        }
+                    }
+                } else if source.role == .imported {
+                    Button("选择目录…") {
+                        chooseDirectory(message: "选择用于存放导入壁纸的目录") { url in
+                            WallpaperLibrary.shared.setImportedDirectory(url)
+                            pathRefresh += 1
+                            AppDelegate.shared.contentViewModel.refresh()
+                        }
+                    }
+                }
+                Button("在访达中显示") {
+                    if !source.exists {
+                        try? FileManager.default.createDirectory(at: source.url, withIntermediateDirectories: true)
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting([source.url])
+                    pathRefresh += 1
+                }
+                if source.role == .customSteam && WallpaperLibrary.shared.isWorkshopDirectoryCustomized {
+                    Button("恢复默认") {
+                        WallpaperLibrary.shared.setWorkshopDirectory(nil)
+                        pathRefresh += 1
+                        AppDelegate.shared.contentViewModel.refresh()
+                    }
+                } else if source.role == .imported && WallpaperLibrary.shared.isImportedDirectoryCustomized {
+                    Button("恢复默认") {
+                        WallpaperLibrary.shared.setImportedDirectory(nil)
+                        pathRefresh += 1
+                        AppDelegate.shared.contentViewModel.refresh()
+                    }
+                }
+            }
+        }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -76,58 +145,8 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("创意工坊目录").font(.callout)
-                    Text(WallpaperLibrary.shared.steamWorkshopDirectory.path(percentEncoded: false))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(2).truncationMode(.middle)
-                        .textSelection(.enabled)
-                    HStack {
-                        Button("选择目录…") {
-                            chooseDirectory(message: "选择 Wallpaper Engine 创意工坊壁纸所在目录（431960）") { url in
-                                WallpaperLibrary.shared.setWorkshopDirectory(url)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                        Button("在访达中显示") {
-                            NSWorkspace.shared.activateFileViewerSelecting([WallpaperLibrary.shared.steamWorkshopDirectory])
-                        }
-                        if WallpaperLibrary.shared.isWorkshopDirectoryCustomized {
-                            Button("恢复默认") {
-                                WallpaperLibrary.shared.setWorkshopDirectory(nil)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("导入壁纸目录").font(.callout)
-                    Text(WallpaperLibrary.shared.importedDirectory.path(percentEncoded: false))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(2).truncationMode(.middle)
-                        .textSelection(.enabled)
-                    HStack {
-                        Button("选择目录…") {
-                            chooseDirectory(message: "选择用于存放导入壁纸的目录") { url in
-                                WallpaperLibrary.shared.setImportedDirectory(url)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                        Button("在访达中显示") {
-                            NSWorkspace.shared.activateFileViewerSelecting([WallpaperLibrary.shared.importedDirectory])
-                        }
-                        if WallpaperLibrary.shared.isImportedDirectoryCustomized {
-                            Button("恢复默认") {
-                                WallpaperLibrary.shared.setImportedDirectory(nil)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                    }
+                ForEach(WallpaperLibrary.shared.librarySources) { source in
+                    librarySourceRow(source)
                 }
 
                 Toggle("自动刷新壁纸库", isOn: $viewModel.settings.autoRefresh)

@@ -38,6 +38,24 @@ enum WPImportError: LocalizedError, Identifiable {
     }
 }
 
+enum WallpaperLibrarySourceRole: String, Hashable {
+    case steam
+    case customSteam
+    case managedSteamCMD
+    case legacySteamCMD
+    case imported
+}
+
+struct WallpaperLibrarySource: Identifiable, Hashable {
+    let role: WallpaperLibrarySourceRole
+    let title: String
+    let detail: String
+    let url: URL
+    let exists: Bool
+
+    var id: String { role.rawValue + ":" + url.standardizedFileURL.path }
+}
+
 final class WallpaperLibrary {
     static let shared = WallpaperLibrary()
 
@@ -46,8 +64,13 @@ final class WallpaperLibrary {
     private let workshopKey = "CustomWorkshopDirectory"
     private let importedKey = "CustomImportedDirectory"
 
-    private var workshopMonitorSource: DispatchSourceFileSystemObject?
-    private var workshopMonitorFD: Int32 = -1
+    private struct DirectoryMonitor {
+        let source: DispatchSourceFileSystemObject
+        let descriptor: Int32
+    }
+
+    private var directoryMonitors: [DirectoryMonitor] = []
+    private var monitoringCallback: (() -> Void)?
 
     var defaultSteamWorkshopDirectory: URL {
         fm.homeDirectoryForCurrentUser
@@ -88,20 +111,40 @@ final class WallpaperLibrary {
 
     func setWorkshopDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: workshopKey)
+        restartMonitoringIfNeeded()
     }
     func setImportedDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: importedKey)
+        restartMonitoringIfNeeded()
+    }
+
+    var librarySources: [WallpaperLibrarySource] {
+        var result: [WallpaperLibrarySource] = []
+        var paths = Set<String>()
+
+        func append(_ role: WallpaperLibrarySourceRole, _ title: String, _ detail: String, _ url: URL, always: Bool = false) {
+            let normalized = url.standardizedFileURL
+            let exists = fm.fileExists(atPath: normalized.path)
+            guard always || exists else { return }
+            guard paths.insert(normalized.path).inserted else { return }
+            result.append(WallpaperLibrarySource(role: role, title: title, detail: detail, url: normalized, exists: exists))
+        }
+
+        if isWorkshopDirectoryCustomized {
+            append(.customSteam, "自定义创意工坊目录", "用户选择的 Wallpaper Engine 内容目录", steamWorkshopDirectory, always: true)
+            append(.steam, "Steam 创意工坊目录", "系统 Steam 的默认内容目录", defaultSteamWorkshopDirectory)
+        } else {
+            append(.steam, "Steam 创意工坊目录", "系统 Steam 的默认内容目录", defaultSteamWorkshopDirectory, always: true)
+        }
+
+        append(.managedSteamCMD, "Mirage 下载目录", "SteamCMD 当前下载和更新壁纸的位置", SteamCMDManager.shared.isolatedSteamCMDContentDirectory, always: true)
+        append(.legacySteamCMD, "Mirage 旧版下载目录", "仅用于兼容旧版本中已经下载的壁纸", SteamCMDManager.shared.steamCMDContentDirectory)
+        append(.imported, "导入壁纸目录", "手动导入或由视频创建的本地壁纸", importedDirectory, always: true)
+        return result
     }
 
     private var sourceDirectories: [URL] {
-        var dirs = [steamWorkshopDirectory, importedDirectory]
-        if isWorkshopDirectoryCustomized, fm.fileExists(atPath: defaultSteamWorkshopDirectory.path) {
-            dirs.append(defaultSteamWorkshopDirectory)
-        }
-        for steamCMDContent in SteamCMDManager.shared.steamCMDContentDirectories where fm.fileExists(atPath: steamCMDContent.path) {
-            dirs.append(steamCMDContent)
-        }
-        return dirs
+        librarySources.filter(\.exists).map(\.url)
     }
 
     func allWallpaperURLs() -> [URL] {
@@ -231,36 +274,38 @@ final class WallpaperLibrary {
     // MARK: - Directory Monitoring
 
     func startMonitoringWorkshopDirectory(onChange: @escaping () -> Void) {
-        stopMonitoringWorkshopDirectory()
+        cancelDirectoryMonitors()
+        monitoringCallback = onChange
 
-        let dirPath = steamWorkshopDirectory.path
-        guard fm.fileExists(atPath: dirPath) else { return }
-
-        workshopMonitorFD = open(dirPath, O_EVTONLY)
-        guard workshopMonitorFD >= 0 else { return }
-
-        workshopMonitorSource = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: workshopMonitorFD,
-            eventMask: .write,
-            queue: .main
-        )
-
-        workshopMonitorSource?.setEventHandler {
-            onChange()
-        }
-
-        workshopMonitorSource?.setCancelHandler { [weak self] in
-            if let fd = self?.workshopMonitorFD, fd >= 0 {
-                close(fd)
-                self?.workshopMonitorFD = -1
+        for directory in sourceDirectories {
+            let descriptor = open(directory.path, O_EVTONLY)
+            guard descriptor >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: descriptor,
+                eventMask: [.write, .delete, .rename],
+                queue: .main
+            )
+            source.setEventHandler {
+                onChange()
             }
+            source.setCancelHandler { close(descriptor) }
+            directoryMonitors.append(DirectoryMonitor(source: source, descriptor: descriptor))
+            source.resume()
         }
-
-        workshopMonitorSource?.resume()
     }
 
     func stopMonitoringWorkshopDirectory() {
-        workshopMonitorSource?.cancel()
-        workshopMonitorSource = nil
+        monitoringCallback = nil
+        cancelDirectoryMonitors()
+    }
+
+    private func cancelDirectoryMonitors() {
+        directoryMonitors.forEach { $0.source.cancel() }
+        directoryMonitors.removeAll()
+    }
+
+    private func restartMonitoringIfNeeded() {
+        guard let callback = monitoringCallback else { return }
+        startMonitoringWorkshopDirectory(onChange: callback)
     }
 }

@@ -68,10 +68,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         steamCMDHomeDirectory.appending(path: "Library/Application Support/Steam")
     }
 
+    var isolatedSteamCMDContentDirectory: URL {
+        isolatedSteamDataDirectory.appending(path: "steamapps/workshop/content/431960")
+    }
+
     var steamCMDContentDirectories: [URL] {
         [
             steamCMDContentDirectory,
-            isolatedSteamDataDirectory.appending(path: "steamapps/workshop/content/431960")
+            isolatedSteamCMDContentDirectory
         ]
     }
 
