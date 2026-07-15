@@ -128,11 +128,40 @@ static NSString *const kShimJS = @"\
     if(p)root.classList.add('__wr-paused');else root.classList.remove('__wr-paused');\
   }\
   window.__wr_pauseStreams=__pauseMedia; window.__wr_resumeStreams=__resumeMedia;\
-  window.__wr_applyProps = function(props){\
+  var __wr_pendingProps={},__wr_propsTimer=0,__wr_propsDelay=25;\
+  function __wr_flushProps(){\
+    __wr_propsTimer=0;\
+    var listener=window.wallpaperPropertyListener;\
+    if(listener&&typeof listener.applyUserProperties==='function'){\
+      try {\
+        var applied=__wr_pendingProps;\
+        listener.applyUserProperties(applied);__wr_pendingProps={};__wr_propsDelay=25;\
+        return;\
+      }\
+      catch(e){ console.error('WebRenderer applyUserProperties:',e); }\
+    }\
+    if(Object.keys(__wr_pendingProps).length){\
+      __wr_propsTimer=__nativeSetTimeout(__wr_flushProps,__wr_propsDelay);\
+      __wr_propsDelay=Math.min(250,__wr_propsDelay*2);\
+    }\
+  }\
+  window.__wr_applyProps=function(props){\
+    if(!props||typeof props!=='object')return;\
+    Object.keys(props).forEach(function(key){__wr_pendingProps[key]=props[key];});\
+    if(!__wr_propsTimer)__wr_flushProps();\
+  };\
+  window.__wr_applySnapshot=function(props,generation){\
+    if(!props||typeof props!=='object')return -1;\
+    var listener=window.wallpaperPropertyListener;\
+    if(!listener||typeof listener.applyUserProperties!=='function')return 0;\
     try {\
-      if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.applyUserProperties === 'function')\
-        window.wallpaperPropertyListener.applyUserProperties(props);\
-    } catch(e){ console.error('WebRenderer applyUserProperties:', e); }\
+      if(__wr_propsTimer){__nativeClearTimeout(__wr_propsTimer);__wr_propsTimer=0;}\
+      __wr_pendingProps={};\
+      listener.applyUserProperties(props);\
+      if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.wrProperties)\
+        window.webkit.messageHandlers.wrProperties.postMessage({generation:String(generation||'snapshot'),count:Object.keys(props).length});\
+      return 1;\
+    } catch(e) { console.error('WebRenderer applyUserProperties:',e); return -1; }\
   };\
   window.__wr_setPaused = function(p){\
     p=!!p; if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
@@ -207,6 +236,10 @@ static NSString *const kDefaultUserAgent =
 @property (nonatomic, strong) NSMutableArray<NSString *> *pendingJS;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *userPropertySnapshot;
+@property (nonatomic, copy) NSString *userPropertyGeneration;
+@property (nonatomic, assign) NSUInteger propertyApplySerial;
+@property (nonatomic, assign) BOOL propertySnapshotApplied;
 @end
 
 @implementation WebRendererEngine {
@@ -246,6 +279,7 @@ static NSString *const kDefaultUserAgent =
                                                forMainFrameOnly:YES];
     [ucc addUserScript:shim];
     [ucc addScriptMessageHandler:self name:@"wrConsole"];
+    [ucc addScriptMessageHandler:self name:@"wrProperties"];
     cfg.userContentController = ucc;
     cfg.preferences.javaScriptCanOpenWindowsAutomatically = YES;
     cfg.suppressesIncrementalRendering = NO;
@@ -271,6 +305,10 @@ static NSString *const kDefaultUserAgent =
 - (void)openWallpaper:(WRManifest *)manifest {
     _manifest = manifest;
     _didFinishLoad = NO;
+    _propertyApplySerial += 1;
+    _propertySnapshotApplied = NO;
+    _userPropertySnapshot = nil;
+    _userPropertyGeneration = nil;
     [_pendingJS removeAllObjects];
 
     _schemeHandler.baseDirectory = manifest.workshopDir;
@@ -305,7 +343,13 @@ static NSString *const kDefaultUserAgent =
 // Evaluate now if loaded, else queue and replay on didFinishNavigation.
 - (void)eval:(NSString *)script {
     if (_didFinishLoad) {
-        [_webView evaluateJavaScript:script completionHandler:nil];
+        [_webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+            (void)result;
+            if (error != nil) {
+                fprintf(stderr, "WebRenderer: JavaScript control failed: %s\n",
+                        error.localizedDescription.UTF8String ?: "unknown error");
+            }
+        }];
     } else {
         [_pendingJS addObject:script];
     }
@@ -315,20 +359,77 @@ static NSString *const kDefaultUserAgent =
     NSArray *pending = [_pendingJS copy];
     [_pendingJS removeAllObjects];
     for (NSString *s in pending) {
-        [_webView evaluateJavaScript:s completionHandler:nil];
+        [self eval:s];
     }
 }
 
 #pragma mark - WE API
 
-- (void)applyAllUserProperties {
-    NSString *json = _manifest.userPropertiesJSON ?: @"{}";
-    [self eval:[NSString stringWithFormat:@"__wr_applyProps(%@);", json]];
+- (void)beginPropertySnapshotApplication {
+    if (!_didFinishLoad || _userPropertySnapshot == nil) return;
+    _propertySnapshotApplied = NO;
+    NSUInteger serial = ++_propertyApplySerial;
+    [self applyPropertySnapshotWithSerial:serial attempt:0];
+}
+
+- (void)applyPropertySnapshotWithSerial:(NSUInteger)serial attempt:(NSUInteger)attempt {
+    if (!_didFinishLoad || serial != _propertyApplySerial || _userPropertySnapshot == nil) return;
+    NSString *json = [self jsLiteralForObject:_userPropertySnapshot];
+    NSString *generationJSON = [self jsLiteralForObject:_userPropertyGeneration ?: @"snapshot"];
+    NSString *script = [NSString stringWithFormat:@"__wr_applySnapshot(%@, %@);", json, generationJSON];
+    __weak WebRendererEngine *weakSelf = self;
+    [_webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        __strong WebRendererEngine *self = weakSelf;
+        if (self == nil || serial != self.propertyApplySerial || !self.didFinishLoad) return;
+        if (error != nil) {
+            fprintf(stderr, "WebRenderer: property snapshot failed: %s\n",
+                    error.localizedDescription.UTF8String ?: "unknown error");
+            return;
+        }
+        NSInteger status = [result respondsToSelector:@selector(integerValue)] ? [result integerValue] : 0;
+        if (status == 1) {
+            self.propertySnapshotApplied = YES;
+            return;
+        }
+        if (status < 0) {
+            fprintf(stderr, "WebRenderer: wallpaper rejected property snapshot generation=%s\n",
+                    self.userPropertyGeneration.UTF8String ?: "snapshot");
+            return;
+        }
+        if (attempt >= 480) {
+            fprintf(stderr, "WebRenderer: property listener did not become ready for generation=%s\n",
+                    self.userPropertyGeneration.UTF8String ?: "snapshot");
+            return;
+        }
+        NSUInteger delayStep = MIN(attempt, (NSUInteger)4);
+        NSTimeInterval delay = MIN(0.25, 0.025 * (1u << delayStep));
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self applyPropertySnapshotWithSerial:serial attempt:attempt + 1];
+        });
+    }];
 }
 
 - (void)applyUserProperty:(NSString *)key value:(id)value {
-    NSString *valLit = [self jsLiteralForObject:value];
-    [self eval:[NSString stringWithFormat:@"__wr_applyProps({\"%@\":%@});", key, valLit]];
+    if (_userPropertySnapshot == nil) {
+        NSDictionary *base = _manifest.userProperties ?: @{};
+        _userPropertySnapshot = [base mutableCopy];
+        _userPropertyGeneration = @"manifest";
+    }
+    _userPropertySnapshot[key] = value;
+    if (!_didFinishLoad) return;
+    if (!_propertySnapshotApplied) {
+        [self beginPropertySnapshotApplication];
+        return;
+    }
+    NSString *payload = [self jsLiteralForObject:@{key: value}];
+    [self eval:[NSString stringWithFormat:@"__wr_applyProps(%@);", payload]];
+}
+
+- (void)applyUserProperties:(NSDictionary<NSString *,id> *)properties generation:(NSString *)generation {
+    _userPropertySnapshot = [properties mutableCopy];
+    _userPropertyGeneration = generation.length > 0 ? [generation copy] : @"snapshot";
+    [self beginPropertySnapshotApplication];
 }
 
 - (void)setPaused:(BOOL)paused {
@@ -406,15 +507,21 @@ static NSString *const kDefaultUserAgent =
 #pragma mark - WKNavigationDelegate
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    (void)webView; (void)navigation;
+    (void)navigation;
     _didFinishLoad = YES;
-    fprintf(stderr, "WebRenderer: navigation finished; injecting user properties\n");
+    fprintf(stderr, "WebRenderer: navigation finished url=%s; injecting user properties\n",
+            webView.URL.absoluteString.UTF8String ?: "unknown");
 
-    // WE order: properties → audio volume → frame rate.
-    [self applyAllUserProperties];
-    if (_config.initialVolume < 1.0f || _muted) {
-        [self setVolume:_volume];
+    if (_userPropertySnapshot == nil) {
+        _userPropertySnapshot = [(_manifest.userProperties ?: @{}) mutableCopy];
+        _userPropertyGeneration = @"manifest";
     }
+    if (_config.initialVolume < 1.0f || _muted) {
+        _userPropertySnapshot[@"audio"] = @{ @"value": @(_volume) };
+        BOOL effectiveMuted = _muted || _volume <= 0.0f;
+        [self eval:[NSString stringWithFormat:@"__wr_applyMute(%@);", effectiveMuted ? @"true" : @"false"]];
+    }
+    [self beginPropertySnapshotApplication];
     if (_config.frameRate > 0 && _config.frameRate < 60) {
         [self setFrameRate:_config.frameRate];
     }
@@ -440,16 +547,27 @@ static NSString *const kDefaultUserAgent =
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     (void)webView; (void)navigation;
+    _didFinishLoad = NO;
+    _propertyApplySerial += 1;
     fprintf(stderr, "WebRenderer: navigation failed: %s\n", error.localizedDescription.UTF8String ?: "");
 }
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     (void)webView; (void)navigation;
+    _didFinishLoad = NO;
+    _propertyApplySerial += 1;
     fprintf(stderr, "WebRenderer: provisional load failed: %s\n", error.localizedDescription.UTF8String ?: "");
 }
 
 - (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)ucc;
+    if ([message.name isEqualToString:@"wrProperties"]) {
+        NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+        fprintf(stderr, "WebRenderer: applied property snapshot generation=%s count=%ld\n",
+                [body[@"generation"] description].UTF8String ?: "unknown",
+                (long)[body[@"count"] integerValue]);
+        return;
+    }
     if (![message.name isEqualToString:@"wrConsole"]) return;
     NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
     NSString *type = body[@"type"] ?: @"log";

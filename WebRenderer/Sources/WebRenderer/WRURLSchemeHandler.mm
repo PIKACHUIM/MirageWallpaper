@@ -66,11 +66,15 @@ static NSString *MIMEForExtension(NSString *ext) {
 
 - (nullable NSString *)resolvedPathForRelative:(NSString *)relative {
     NSFileManager *fm = NSFileManager.defaultManager;
-    for (NSString *overlay in _overlayDirectories) {
-        NSString *candidate = [self safePathForRelative:relative inDirectory:overlay];
-        BOOL isDirectory = NO;
-        if (candidate != nil && [fm fileExistsAtPath:candidate isDirectory:&isDirectory] && !isDirectory) {
-            return candidate;
+    NSString *normalized = [relative stringByTrimmingCharactersInSet:
+        [NSCharacterSet characterSetWithCharactersInString:@"/"]];
+    if (![normalized.lowercaseString isEqualToString:@"project.json"]) {
+        for (NSString *overlay in _overlayDirectories) {
+            NSString *candidate = [self safePathForRelative:relative inDirectory:overlay];
+            BOOL isDirectory = NO;
+            if (candidate != nil && [fm fileExistsAtPath:candidate isDirectory:&isDirectory] && !isDirectory) {
+                return candidate;
+            }
         }
     }
     return [self safePathForRelative:relative inDirectory:_baseDirectory];

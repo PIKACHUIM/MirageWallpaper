@@ -41,7 +41,7 @@ typedef struct {
 
 // wallpaperPropertyListener.applyUserProperties({key: {value: ...}}).
 - (void)applyUserProperty:(NSString *)key value:(id)value;
-- (void)applyAllUserProperties;
+- (void)applyUserProperties:(NSDictionary<NSString *, id> *)properties generation:(NSString *)generation;
 
 // Freezes page animation clocks, timers, CSS animations and playing media, then
 // calls wallpaperPropertyListener.setPaused (the Wallpaper Engine contract).

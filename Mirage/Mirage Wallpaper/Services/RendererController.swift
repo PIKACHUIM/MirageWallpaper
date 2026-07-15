@@ -246,9 +246,6 @@ final class RendererController {
             return false
         }
 
-        proc.arguments = args
-        proc.environment = env
-
         let stdinPipe = Pipe()
         let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
@@ -257,11 +254,14 @@ final class RendererController {
 
         let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
 
-        // Register the temp props file for cleanup when the process stops.
-        if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
+        if wallpaper.kind == .scene,
+           let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
             args += ["--user-properties", propsFile.path]
             handle.tempFiles.append(propsFile)
         }
+
+        proc.arguments = args
+        proc.environment = env
 
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
@@ -446,9 +446,18 @@ final class RendererController {
 
     private func applyInitialProperties(_ props: [String: WEProjectProperty], to handle: RendererProcess) {
         guard handle.wallpaper.kind == .web else { return }
-        let cmds = props.map { Self.propertyCommand(key: $0.key, property: $0.value) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            for c in cmds { handle.send(c) }
+        var values: [String: Any] = [:]
+        values.reserveCapacity(props.count)
+        for (key, property) in props {
+            let command = Self.propertyCommand(key: key, property: property)
+            if let value = command["value"] {
+                values[key] = ["value": value]
+            }
         }
+        handle.send([
+            "cmd": "setProperties",
+            "generation": UUID().uuidString,
+            "values": values
+        ])
     }
 }

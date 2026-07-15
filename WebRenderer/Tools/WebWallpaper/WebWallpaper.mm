@@ -204,6 +204,14 @@ int main(int argc, char *argv[]) {
                             // WE property listener expects {key:{value:...}}.
                             [eng applyUserProperty:key value:@{@"value": value}];
                         }
+                    } else if ([name isEqualToString:@"setProperties"]) {
+                        NSDictionary *values = [cmd[@"values"] isKindOfClass:[NSDictionary class]] ? cmd[@"values"] : nil;
+                        NSString *generation = [cmd[@"generation"] isKindOfClass:[NSString class]] ? cmd[@"generation"] : @"snapshot";
+                        if (values != nil) {
+                            fprintf(stderr, "WebRenderer: received property snapshot generation=%s count=%ld\n",
+                                    generation.UTF8String ?: "snapshot", (long)values.count);
+                            [eng applyUserProperties:values generation:generation];
+                        }
                     } else if ([name isEqualToString:@"pause"]) {
                         [eng setPaused:YES];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
