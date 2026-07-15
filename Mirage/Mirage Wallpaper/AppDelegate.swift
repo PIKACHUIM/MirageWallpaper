@@ -139,7 +139,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toolbar.delegate = self
         toolbar.selectedItemIdentifier = SettingsToolbarIdentifiers.performance
         self.settingsWindow.toolbar = toolbar
-        self.settingsWindow.contentView = NSHostingView(rootView: SettingsView().environmentObject(self.globalSettingsViewModel))
+
+        let settingsHosting = NSHostingView(rootView: SettingsView().environmentObject(self.globalSettingsViewModel))
+        settingsHosting.sizingOptions = []
+        settingsHosting.translatesAutoresizingMaskIntoConstraints = true
+        settingsHosting.autoresizingMask = [.width, .height]
+        settingsHosting.frame = NSRect(origin: .zero, size: self.settingsWindow.contentLayoutRect.size)
+        self.settingsWindow.contentView = settingsHosting
     }
 
     func windowWillClose(_ notification: Notification) {

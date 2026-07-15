@@ -7,66 +7,6 @@
 import Cocoa
 import SwiftUI
 
-// MARK: - 防约束循环的 NSHostingView 子类
-//
-// 根本原因分析:
-// SwiftUI 的 NSHostingView 在 hitTest 期间会执行 flushTransactions →
-// graphDidChange → requestUpdate → setNeedsUpdateConstraints。当此时窗口
-// 正处于 display cycle 中时，会导致无限约束更新循环。
-//
-// 这个问题在 commit 80926f5 引入 RmskinViewModel 后被放大：
-// RmskinViewModel.init() 异步加载数据后在主线程更新 @Published 属性，
-// 产生额外的 graph transactions，增加了 hitTest 期间 flush 的概率。
-//
-// 解决方案: 完全禁用 NSHostingView 的 Auto Layout 约束参与，
-// 改用 autoresizingMask 驱动尺寸，这样 setNeedsUpdateConstraints
-// 即使被调用也不会向窗口传播约束更新请求。
-class StableHostingView<Content: View>: NSHostingView<Content> {
-
-    required init(rootView: Content) {
-        super.init(rootView: rootView)
-        translatesAutoresizingMaskIntoConstraints = true
-    }
-
-    @available(*, unavailable)
-    required dynamic init?(coder: NSCoder) { fatalError() }
-
-    // ===== 彻底切断约束循环 =====
-    //
-    // 堆栈分析显示循环路径:
-    //   NSWindow display cycle → updateConstraintsForSubtreeIfNeeded
-    //   → NSHostingView.updateConstraints() [frame 15-16]
-    //   → 内部 defer 闭包调用子视图 updateConstraints [frame 14]
-    //   → _prepareForTwoPassConstraintsUpdateIfNeeded [frame 13]
-    //   → setNeedsUpdateConstraints: [frame 12]
-    //   → _informContainerThatSubviewsNeedUpdateConstraints 向上传播
-    //   → 窗口再次标记需要约束更新 → 循环
-    //
-    // 解决: 完全不调用 super.updateConstraints()。
-    // 我们使用 autoresizingMask 管理布局，不需要 Auto Layout 约束。
-    // NSHostingView 会通过自身的 layout()/draw() 正确渲染 SwiftUI 内容，
-    // 约束系统并非其渲染的必要条件。
-
-    // 彻底跳过 NSHostingView 的 updateConstraints 实现。
-    // NSHostingView.updateConstraints() 内部会触发子视图约束更新，
-    // 子视图再次标记 setNeedsUpdateConstraints，形成无限循环。
-    // 我们跳过它，只保留 NSView 的基础实现来满足 AppKit 协议。
-    override func updateConstraints() {
-        // 跳过 NSHostingView 的实现，直接调用 NSView 的版本
-        // NSView.updateConstraints() 只是一个空壳/标记已更新
-        let sel = #selector(NSView.updateConstraints)
-        if let imp = NSView.instanceMethod(for: sel) {
-            typealias Fn = @convention(c) (AnyObject, Selector) -> Void
-            let fn = unsafeBitCast(imp, to: Fn.self)
-            fn(self, sel)
-        }
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
-    }
-}
-
 class MainWindowController: NSWindowController, NSWindowDelegate {
     override var window: NSWindow! {
         get {
@@ -92,22 +32,22 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.isMovableByWindowBackground = true
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
 
-        // 使用普通 NSView 作为 contentView，NSHostingView 作为子视图填充。
-        // 这确保 NSHostingView 的约束更新不会直接传播到窗口的 contentView 层级。
-        let container = NSView(frame: NSRect(origin: .zero, size: self.window.contentLayoutRect.size))
-        container.autoresizesSubviews = true
-        container.wantsLayer = true
-
-        let hostingView = StableHostingView(rootView: ContentView(
+        let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        hostingView.frame = container.bounds
+        // 关键修复: 禁用 NSHostingView 基于 SwiftUI 内容尺寸自动生成/更新
+        // Auto Layout 约束的行为。默认情况下 NSHostingView 会根据内容的
+        // intrinsicContentSize/minSize 等在每次 graph change 时更新约束，
+        // 当窗口内含 TextField / .background 等桥接 AppKit 的子视图时，
+        // 会在 display cycle 中形成 setNeedsUpdateConstraints 无限循环。
+        // 设为 [] 后改由 autoresizingMask 驱动尺寸，彻底切断循环。
+        hostingView.sizingOptions = []
+        hostingView.translatesAutoresizingMaskIntoConstraints = true
         hostingView.autoresizingMask = [.width, .height]
-        container.addSubview(hostingView)
-
-        self.window.contentView = container
+        hostingView.frame = NSRect(origin: .zero, size: self.window.contentLayoutRect.size)
+        self.window.contentView = hostingView
     }
     
     required init?(coder: NSCoder) {
