@@ -1969,6 +1969,23 @@ void ApplyUserTextureBindings(ParseContext& context, wpscene::Material& material
     }
 }
 
+void ApplyObjectInstanceOverrides(wpscene::Material& material,
+                                  const wpscene::ObjectInstance& instance) {
+    if (! instance.present) return;
+    if (material.textures.size() < instance.textures.size())
+        material.textures.resize(instance.textures.size());
+    for (usize i = 0; i < instance.textures.size(); ++i) {
+        if (! instance.textures[i].empty()) material.textures[i] = instance.textures[i];
+    }
+    while (material.usertextures.len() < instance.usertextures.len())
+        material.usertextures.push(Json::Null());
+    for (usize i = 0; i < instance.usertextures.len(); ++i) {
+        if (! instance.usertextures[i].is_null())
+            material.usertextures[i] = instance.usertextures[i].clone();
+    }
+    for (const auto& [key, value] : instance.combos) material.combos[key] = value;
+}
+
 void IndexSystemMediaImageFallbacks(ParseContext& context, std::span<SceneObjectVar> scene_objs) {
     context.system_media_image_fallbacks.clear();
     for (const auto& obj : scene_objs) {
@@ -2379,9 +2396,17 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     ShaderValueMap    baseConstSvs = context.global_base_uniforms;
     WPShaderInfo      shaderInfo;
     wpscene::Material image_wpmat                 = wpimgobj.material.clone();
+    ApplyObjectInstanceOverrides(image_wpmat, wpimgobj.instance);
     wpscene::Material image_user_texture_fallback = image_wpmat.clone();
     if (color_blend_uses_layer_material && ! hasEffect) ApplyImageColorBlend(image_wpmat, wpimgobj);
     ApplyUserTextureBindings(context, image_wpmat);
+    const bool replaced_solid_color =
+        wpimgobj.solid_layer && ! image_user_texture_fallback.textures.empty() &&
+        ! image_wpmat.textures.empty() && image_user_texture_fallback.textures[0] == "util/white" &&
+        image_wpmat.textures[0] != image_user_texture_fallback.textures[0];
+    const std::array<float, 3> layer_color =
+        replaced_solid_color ? std::array<float, 3> { 1.0f, 1.0f, 1.0f } : wpimgobj.color;
+    spImgNode->SetBaseColor(Vector3f(layer_color.data()), wpimgobj.alpha);
     {
         svData.propagate_parallax_to_children = ! wpimgobj.disablepropagation;
         svData.propagatedParallaxDepth = { wpimgobj.parallaxDepth[0], wpimgobj.parallaxDepth[1] };
@@ -2393,10 +2418,10 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         }
 
         baseConstSvs[std::string(G_COLOR4)] = std::array<float, 4> {
-            wpimgobj.color[0], wpimgobj.color[1], wpimgobj.color[2], wpimgobj.alpha
+            layer_color[0], layer_color[1], layer_color[2], wpimgobj.alpha
         };
         baseConstSvs[std::string(G_COLOR)] =
-            std::array<float, 3> { wpimgobj.color[0], wpimgobj.color[1], wpimgobj.color[2] };
+            std::array<float, 3> { layer_color[0], layer_color[1], layer_color[2] };
         baseConstSvs[std::string(G_ALPHA)]      = wpimgobj.alpha;
         baseConstSvs[std::string(G_USERALPHA)]  = wpimgobj.alpha;
         baseConstSvs[std::string(G_BRIGHTNESS)] = wpimgobj.brightness;
