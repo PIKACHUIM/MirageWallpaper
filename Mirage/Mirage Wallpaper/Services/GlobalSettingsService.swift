@@ -172,6 +172,12 @@ class GlobalSettingsViewModel: ObservableObject {
         didCurrentWallpaperChangeCancellable?.cancel()
         didAddToLoginItemCancellable?.cancel()
         didChangeAdjustMenuBarTintCancellable?.cancel()
+        playbackEvalTimer?.invalidate()
+        playbackEvalWorkItem?.cancel()
+        for observer in workspacePlaybackObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        if let desktopClickMonitor { NSEvent.removeMonitor(desktopClickMonitor) }
     }
     
     func didFinishLaunchingNotification() {
@@ -202,6 +208,27 @@ class GlobalSettingsViewModel: ObservableObject {
             self, selector: #selector(displayDidWake),
             name: NSWorkspace.screensDidWakeNotification, object: nil)
 
+        let playbackNotifications: [Notification.Name] = [
+            NSWorkspace.activeSpaceDidChangeNotification,
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didDeactivateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification,
+            NSWorkspace.didUnhideApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification
+        ]
+        for name in playbackNotifications {
+            let observer = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                self?.schedulePlaybackEvaluation()
+            }
+            workspacePlaybackObservers.append(observer)
+        }
+        desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+            self?.schedulePlaybackEvaluation()
+        }
+
         self.playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.evaluatePlaybackState()
         }
@@ -212,10 +239,20 @@ class GlobalSettingsViewModel: ObservableObject {
 
     private var displayAsleep = false
     private var playbackEvalTimer: Timer?
+    private var playbackEvalWorkItem: DispatchWorkItem?
+    private var workspacePlaybackObservers: [NSObjectProtocol] = []
+    private var desktopClickMonitor: Any?
     private(set) var effectivePlaybackAction = GSPlayback.keepRunning
 
     @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
     @objc private func displayDidWake()  { displayAsleep = false; evaluatePlaybackState() }
+
+    private func schedulePlaybackEvaluation() {
+        playbackEvalWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.evaluatePlaybackState() }
+        playbackEvalWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
     
     func didAddToLoginItem(_ added: Bool) {
         let appService = SMAppService.mainApp
@@ -326,10 +363,11 @@ class GlobalSettingsViewModel: ObservableObject {
 
         let front = NSWorkspace.shared.frontmostApplication
         let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        let desktopExposed = isDesktopExposed()
         let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
             && !appHasVisibleWindows(pid: front?.processIdentifier)
 
-        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder {
+        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder, !desktopExposed {
             if appIsFullscreen(pid: front.processIdentifier) {
                 actions.append(settings.otherApplicationFullscreen)
             } else {
@@ -437,5 +475,46 @@ class GlobalSettingsViewModel: ObservableObject {
             }
         }
         return false
+    }
+
+    private func isDesktopExposed() -> Bool {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+        let rendererPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
+        let selfPID = ProcessInfo.processInfo.processIdentifier
+        let applications = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map {
+            ($0.processIdentifier, $0)
+        })
+
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &displayCount)
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        CGGetActiveDisplayList(displayCount, &displayIDs, &displayCount)
+        let displays = displayIDs.prefix(Int(displayCount)).map(CGDisplayBounds)
+
+        for info in windows {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  pid != selfPID, !rendererPIDs.contains(pid),
+                  let app = applications[pid], app.activationPolicy == .regular,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
+                  bounds.width >= 120, bounds.height >= 80 else { continue }
+
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            guard alpha > 0.05 else { continue }
+            let windowArea = bounds.width * bounds.height
+            for display in displays {
+                let visibleArea = bounds.intersection(display).standardized
+                guard !visibleArea.isNull else { continue }
+                let intersectionArea = visibleArea.width * visibleArea.height
+                let screenArea = display.width * display.height
+                if intersectionArea >= 30_000,
+                   (intersectionArea / max(windowArea, 1) >= 0.25 || intersectionArea / max(screenArea, 1) >= 0.02) {
+                    return false
+                }
+            }
+        }
+        return true
     }
 }
