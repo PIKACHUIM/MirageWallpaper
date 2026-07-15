@@ -59,6 +59,7 @@ jobs:
           ./SceneRenderer/scripts/build.sh release
           ./WebRenderer/scripts/build.sh release
           ./VideoRenderer/scripts/build.sh release
+          ./RmskinRenderer/scripts/build.sh release
 
       - name: Build app bundle
         shell: bash
@@ -73,6 +74,7 @@ jobs:
           test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/SceneWallpaper"
           test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/WebWallpaper"
           test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/VideoWallpaper"
+          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/RmskinWallpaper"
           codesign --verify --deep --strict "Mirage/dist/Mirage.app"
           built_in_key="$(/usr/libexec/PlistBuddy -c 'Print :MirageSteamWebAPIKey' \
             "Mirage/dist/Mirage.app/Contents/Info.plist")"

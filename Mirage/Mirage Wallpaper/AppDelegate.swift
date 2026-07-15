@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
+    var rmskinViewModel = RmskinViewModel()
 
     var importOpenPanel: NSOpenPanel!
 
@@ -76,6 +77,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         wallpaperViewModel.renderer.stopAll()
+        rmskinViewModel.stopAll()
 
         if let wallpaper = UserDefaults.standard.url(forKey: "OSWallpaper") {
             try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: .main!)

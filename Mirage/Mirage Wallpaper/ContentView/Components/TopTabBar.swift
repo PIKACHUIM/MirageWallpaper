@@ -36,6 +36,24 @@ struct TopTabBar: SubviewOfContentView {
                     }
 
                     Button {
+                        viewModel.topTabBarSelection = 3
+                    } label: {
+                        Label("小组件", systemImage: "square.grid.2x2.fill")
+                            .contentShape(Rectangle())
+                            .foregroundStyle(viewModel.topTabBarSelection == 3 || viewModel.topTabBarHoverSelection == 3 ? .white : .primary)
+                            .font(.title3)
+                            .padding(4)
+                    }
+                    .background(viewModel.topTabBarSelection == 3 ? Color.blue : Color.clear)
+                    .background(viewModel.topTabBarHoverSelection == 3 ? Color.blue : Color.clear)
+                    .overlay(Rectangle()
+                        .stroke(lineWidth: 2)
+                        .foregroundStyle(Color.accentColor))
+                    .onHover { hovering in
+                        viewModel.topTabBarHoverSelection = hovering ? 3 : -1
+                    }
+
+                    Button {
                         viewModel.topTabBarSelection = 1
                     } label: {
                         Label("发现", systemImage: "sparkle.magnifyingglass")
