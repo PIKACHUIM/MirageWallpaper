@@ -12,17 +12,17 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name
     @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase
     
-    @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.all
-    @AppStorage("FRType") public var type = FRType.all
-    @AppStorage("FRAgeRating") public var ageRating = FRAgeRating.all
-    @AppStorage("FRWidescreenResolution") public var widescreenResolution = FRWidescreenResolution.all
-    @AppStorage("FRUltraWidescreenResolution") public var ultraWidescreenResolution = FRUltraWidescreenResolution.all
-    @AppStorage("FRDualscreenResolution") public var dualscreenResolution = FRDualscreenResolution.all
-    @AppStorage("FRTriplescreenResolution") public var triplescreenResolution = FRTriplescreenResolution.all
-    @AppStorage("FRPortraitScreenResolution") public var potraitscreenResolution = FRPortraitScreenResolution.all
-    @AppStorage("FRMiscResolution") public var miscResolution = FRMiscResolution.all
-    @AppStorage("FRSource") public var source = FRSource.all
-    @AppStorage("FRTag") public var tag = FRTag.all
+    @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.all { didSet { currentPage = 1 } }
+    @AppStorage("FRType") public var type = FRType.all { didSet { currentPage = 1 } }
+    @AppStorage("FRAgeRating") public var ageRating = FRAgeRating.all { didSet { currentPage = 1 } }
+    @AppStorage("FRWidescreenResolution") public var widescreenResolution = FRWidescreenResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRUltraWidescreenResolution") public var ultraWidescreenResolution = FRUltraWidescreenResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRDualscreenResolution") public var dualscreenResolution = FRDualscreenResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRTriplescreenResolution") public var triplescreenResolution = FRTriplescreenResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRPortraitScreenResolution") public var potraitscreenResolution = FRPortraitScreenResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRMiscResolution") public var miscResolution = FRMiscResolution.all { didSet { currentPage = 1 } }
+    @AppStorage("FRSource") public var source = FRSource.all { didSet { currentPage = 1 } }
+    @AppStorage("FRTag") public var tag = FRTag.all { didSet { currentPage = 1 } }
     
     @AppStorage("FilterReveal") var isFilterReveal = false
     @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 200
@@ -44,7 +44,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     
     @Published var isUnsubscribeConfirming = false
 
-    @Published var searchText = ""
+    @Published var searchText = "" { didSet { currentPage = 1 } }
 
     @Published var isSteamSetupPresented = false
     
@@ -260,7 +260,9 @@ class ContentViewModel: ObservableObject, DropDelegate {
     public var autoRefreshWallpapers: [WEWallpaper] {
         let all = sortedWallpapers
         guard wallpapersPerPage > 0 else { return all }
-        let startIndex = (currentPage - 1) * wallpapersPerPage
+        let pageCount = max(1, Int(ceil(Double(all.count) / Double(wallpapersPerPage))))
+        let page = min(max(currentPage, 1), pageCount)
+        let startIndex = (page - 1) * wallpapersPerPage
         guard startIndex < all.count else { return [] }
         let endIndex = min(startIndex + wallpapersPerPage, all.count)
         return Array(all[startIndex..<endIndex])
