@@ -32,13 +32,21 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.isMovableByWindowBackground = true
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
 
+        // 使用中间容器 NSView，让 NSHostingView 通过 autoresizing 填充，
+        // 避免 NSHostingView 直接作为 contentView 时其内部约束与窗口约束系统循环冲突
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1029, height: 669))
+        container.autoresizesSubviews = true
+
         let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        self.window.contentView = hostingView
+        hostingView.frame = container.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        container.addSubview(hostingView)
+
+        self.window.contentView = container
     }
     
     required init?(coder: NSCoder) {

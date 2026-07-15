@@ -198,7 +198,6 @@ struct ContentView: View {
             SteamSetupView(viewModel: SteamSetupViewModel())
                 .frame(width: 560, height: 640)
         }
-        .frame(minWidth: 1000, minHeight: 640, idealHeight: 800)
     }
 }
 

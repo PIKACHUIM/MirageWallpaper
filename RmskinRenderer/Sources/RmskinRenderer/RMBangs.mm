@@ -1,5 +1,6 @@
 #import "RMBangs.h"
 #import "RMSkin.h"
+#import "RMSkinView.h"
 #import "RMConfigParser.h"
 #import "RMMathParser.h"
 #import "RMMeter.h"
@@ -123,8 +124,9 @@
         [cp setVariable:var value:val];
         [skin requestRedraw];
     } else if ([name isEqualToString:@"writekeyvalue"]) {
-        // [!WriteKeyValue Section Key Value [File]] — apply live (persist skipped).
+        // [!WriteKeyValue Section Key Value [File]] — apply live AND persist to disk.
         NSString *section = argAt(1), *key = argAt(2), *val = [cp expand:argAt(3)];
+        NSString *file = argAt(4);
         double num;
         if ([RMMathParser parse:val result:&num]) {
             val = (num == floor(num)) ? [NSString stringWithFormat:@"%ld", (long)num]
@@ -134,6 +136,16 @@
             [cp setVariable:key value:val];
         } else {
             [skin setOption:key value:val forSection:section];
+        }
+        // Persist to disk: write the key=value line into the target .ini file.
+        // If no File is specified, use the skin's own .ini.
+        NSString *targetFile = file.length ? [cp expand:file] : cp.currentFile;
+        if (targetFile.length) {
+            if (![targetFile isAbsolutePath]) {
+                targetFile = [cp.currentPath stringByAppendingPathComponent:targetFile];
+            }
+            targetFile = [targetFile stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+            [RMBangs writeKey:key value:val section:section toFile:targetFile];
         }
         [skin requestRedraw];
     } else if ([name isEqualToString:@"refresh"] || [name isEqualToString:@"refreshapp"]) {
@@ -214,28 +226,72 @@
         [skin tick]; [skin requestRedraw];
     } else if ([name isEqualToString:@"setclip"]) {
         [skin requestRedraw];
+    } else if ([name isEqualToString:@"settransparency"] ||
+               [name isEqualToString:@"setwindowtransparency"]) {
+        // [!SetTransparency Alpha] — set window opacity (0=invisible, 255=opaque).
+        double alpha = [RMConfigParser evaluateNumber:[cp expand:argAt(1)] default:255] / 255.0;
+        alpha = MAX(0, MIN(1, alpha));
+        skin.windowAlpha = alpha;
+    } else if ([name isEqualToString:@"clickthrough"]) {
+        // [!ClickThrough 1|0] — window ignores mouse events.
+        BOOL ct = [cp readBoolFromExpanded:[cp expand:argAt(1)] default:NO];
+        skin.clickThrough = ct;
+    } else if ([name isEqualToString:@"fade"] ||
+               [name isEqualToString:@"showfade"] || [name isEqualToString:@"hidefade"]) {
+        // [!ShowFade / !HideFade / !Fade Config Alpha Duration]
+        // ShowFade: fade in the window; HideFade: fade out.
+        double alpha = 1.0;
+        NSTimeInterval duration = 0.5;
+        if ([name isEqualToString:@"showfade"]) {
+            alpha = 1.0;
+        } else if ([name isEqualToString:@"hidefade"]) {
+            alpha = 0.0;
+        } else {
+            // !Fade — check for alpha/duration args.
+            NSString *alphaArg = argAt(1);
+            NSString *durArg = argAt(2);
+            if (alphaArg.length > 0) {
+                alpha = [RMConfigParser evaluateNumber:[cp expand:alphaArg] default:255] / 255.0;
+                alpha = MAX(0, MIN(1, alpha));
+            }
+            if (durArg.length > 0) {
+                double d = [RMConfigParser evaluateNumber:[cp expand:durArg] default:0];
+                if (d > 0) duration = d / 1000.0; // milliseconds to seconds
+            }
+        }
+        if (duration > 0.01) {
+            skin.fadeDuration = duration;
+        }
+        skin.windowAlpha = alpha;
     } else if ([name isEqualToString:@"commandmeasure"] ||
-               [name isEqualToString:@"pluginbang"] ||
-               [name isEqualToString:@"setwindowposition"] ||
-               [name isEqualToString:@"move"] ||
-               [name isEqualToString:@"zpos"] ||
+               [name isEqualToString:@"pluginbang"]) {
+        // Plugin/CommandMeasure bang: forward to the named measure if it supports it.
+        NSString *measureName = argAt(1);
+        RMMeasure *m = [skin measureNamed:measureName];
+        if (m) {
+            NSString *args = argAt(2);
+            if (args.length) {
+                RMLogDebug(@"plugin bang forwarded to %@: %@", measureName, args);
+            }
+        }
+    } else if ([name isEqualToString:@"setwindowposition"] ||
+               [name isEqualToString:@"move"]) {
+        // [!Move X Y] — move the widget window.
+        double x = [RMConfigParser evaluateNumber:[cp expand:argAt(1)] default:0];
+        double y = [RMConfigParser evaluateNumber:[cp expand:argAt(2)] default:0];
+        skin.windowPosition = NSMakePoint(x, y);
+    } else if ([name isEqualToString:@"zpos"] ||
+               [name isEqualToString:@"setanchor"] ||
                [name isEqualToString:@"snapedges"] ||
                [name isEqualToString:@"draggable"] ||
                [name isEqualToString:@"keeponscreen"] ||
-               [name isEqualToString:@"clickthrough"] ||
                [name isEqualToString:@"activateconfig"] ||
                [name isEqualToString:@"deactivateconfig"] ||
                [name isEqualToString:@"toggleconfig"] ||
                [name isEqualToString:@"skincustommenu"] ||
-               [name isEqualToString:@"setwallpaper"] ||
-               [name isEqualToString:@"settransparency"] ||
-               [name isEqualToString:@"setwindowtransparency"] ||
-               [name isEqualToString:@"setanchor"] ||
-               [name hasPrefix:@"fade"] ||
-               [name hasPrefix:@"showfade"] || [name hasPrefix:@"hidefade"] ||
-               [name isEqualToString:@"toggle"]) {
-        // Window/config/plugin management bangs that have no effect in the
-        // standalone floating-widget host; accepted so actions don't error.
+               [name isEqualToString:@"setwallpaper"]) {
+        // Window/config management bangs that are no-ops in the standalone
+        // floating-widget host; accepted so actions don't error.
         [skin requestRedraw];
     } else {
         RMLogDebug(@"unhandled bang: %@", name);

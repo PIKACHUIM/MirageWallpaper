@@ -26,6 +26,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared = AppDelegate()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // 禁用窗口状态恢复，防止 restoreWindowWithIdentifier 错误
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+
         setSettingsWindow()
         setMainMenu()
         setStatusMenu()

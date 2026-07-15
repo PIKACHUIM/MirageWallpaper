@@ -9,6 +9,7 @@
 #include <sys/param.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <arpa/inet.h>
 #include <IOKit/ps/IOPSKeys.h>
 #include <IOKit/ps/IOPowerSources.h>
 
@@ -641,28 +642,207 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 }
 @end
 
-#pragma mark - NowPlaying (idle stub: no player integration)
+#pragma mark - NowPlaying (real macOS implementation via AppleScript)
 
-// Returns Rainmeter-like idle values so music widgets render their default
-// state (Play button, 0:00 times, "Not Available" via the skin's Substitute)
-// even without a connected media player.
+// Queries the active music player (Music.app, Spotify) via AppleScript, falling
+// back to the stub idle state when no player is running or script execution fails.
 @implementation RMMeasureNowPlaying {
     NSString *_playerType;
+    NSString *_playerName; // "iTunes", "Spotify", "Music", or empty for auto-detect
+    NSTimeInterval _lastQueryTime;
+    NSMutableDictionary<NSString *, NSString *> *_cachedInfo; // playerType -> cached value
+    BOOL _didInitialQuery;
 }
+
 - (BOOL)isStringMeasure { return YES; }
+
 - (void)readSubclassOptions {
     _playerType = ([self.parser readString:self.name key:@"PlayerType" default:@"TITLE"]).uppercaseString;
+    _playerName = [self.parser readString:self.name key:@"PlayerName" default:@""];
     self.maxValue = 1;
+    _cachedInfo = [NSMutableDictionary dictionary];
+    _didInitialQuery = NO;
 }
-- (void)updateValue { self.value = 0; }
+
+- (void)updateValue {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    // Query at most once per second to avoid excessive AppleScript invocations.
+    if (now - _lastQueryTime < 1.0 && _didInitialQuery) return;
+    _lastQueryTime = now;
+    _didInitialQuery = YES;
+
+    // Auto-detect player or use specified one.
+    NSString *player = _playerName;
+    if (player.length == 0) {
+        player = [self detectActivePlayer];
+    }
+
+    if (player.length == 0) {
+        [self setIdleState];
+        return;
+    }
+
+    NSDictionary *info = [self queryPlayer:player];
+    if (info == nil || info.count == 0) {
+        [self setIdleState];
+        return;
+    }
+
+    [_cachedInfo addEntriesFromDictionary:info];
+    NSString *state = _cachedInfo[@"STATE"] ?: @"0";
+
+    if ([state isEqualToString:@"1"]) {
+        self.value = 1.0;
+    } else {
+        self.value = 0.0;
+    }
+
+    // Parse duration/progress for numeric value.
+    if ([_playerType isEqualToString:@"POSITION"]) {
+        self.value = [self parseSeconds:_cachedInfo[@"POSITION"]];
+        self.maxValue = [self parseSeconds:_cachedInfo[@"DURATION"]];
+    } else if ([_playerType isEqualToString:@"DURATION"]) {
+        self.value = [self parseSeconds:_cachedInfo[@"DURATION"]];
+        self.maxValue = MAX(self.value, self.maxValue);
+    } else if ([_playerType isEqualToString:@"PROGRESS"]) {
+        double dur = [self parseSeconds:_cachedInfo[@"DURATION"]];
+        double pos = [self parseSeconds:_cachedInfo[@"POSITION"]];
+        self.value = dur > 0 ? (pos / dur * 100.0) : 0;
+        self.maxValue = 100;
+    }
+}
+
 - (nullable NSString *)rawString {
-    if ([_playerType isEqualToString:@"STATE"])    return @"0";   // 0 = stopped → Play.png
-    if ([_playerType isEqualToString:@"POSITION"]) return @"0:00";
-    if ([_playerType isEqualToString:@"DURATION"]) return @"0:00";
-    if ([_playerType isEqualToString:@"PROGRESS"]) return @"0";
-    // TITLE / ARTIST / ALBUM / COVER / etc. → empty (skin Substitute maps it).
+    NSString *val = _cachedInfo[_playerType];
+    if (val) return val;
+
+    // Return default idle values for known types.
+    if ([_playerType isEqualToString:@"STATE"])       return @"0";
+    if ([_playerType isEqualToString:@"POSITION"])    return @"0:00";
+    if ([_playerType isEqualToString:@"DURATION"])    return @"0:00";
+    if ([_playerType isEqualToString:@"PROGRESS"])    return @"0";
     return @"";
 }
+
+- (double)parseSeconds:(NSString *)timeStr {
+    if (!timeStr || timeStr.length == 0) return 0;
+    NSArray *parts = [timeStr componentsSeparatedByString:@":"];
+    if (parts.count == 2) {
+        return [parts[0] doubleValue] * 60 + [parts[1] doubleValue];
+    }
+    return [timeStr doubleValue];
+}
+
+- (void)setIdleState {
+    [_cachedInfo setObject:@"0" forKey:@"STATE"];
+    [_cachedInfo setObject:@"0:00" forKey:@"POSITION"];
+    [_cachedInfo setObject:@"0:00" forKey:@"DURATION"];
+    [_cachedInfo setObject:@"0" forKey:@"PROGRESS"];
+    self.value = 0;
+}
+
+- (NSString *)detectActivePlayer {
+    // Try Music.app (macOS 10.15+) first, then Spotify.
+    for (NSString *app in @[@"Music", @"Spotify", @"iTunes"]) {
+        if ([self isAppRunning:app]) return app;
+    }
+    return @"";
+}
+
+- (BOOL)isAppRunning:(NSString *)appName {
+    NSArray *apps = [NSRunningApplication runningApplicationsWithBundleIdentifier:
+                      [self bundleIDForApp:appName]];
+    return apps.count > 0;
+}
+
+- (NSString *)bundleIDForApp:(NSString *)app {
+    if ([app isEqualToString:@"Music"])  return @"com.apple.Music";
+    if ([app isEqualToString:@"iTunes"]) return @"com.apple.iTunes";
+    if ([app isEqualToString:@"Spotify"]) return @"com.spotify.client";
+    return @"";
+}
+
+- (NSDictionary *)queryPlayer:(NSString *)player {
+    NSString *script = nil;
+
+    if ([player isEqualToString:@"Music"] || [player isEqualToString:@"iTunes"]) {
+        script = [NSString stringWithFormat:
+            @"tell application \"%@\"\n"
+            @"  if player state is playing then\n"
+            @"    set trackName to name of current track\n"
+            @"    set trackArtist to artist of current track\n"
+            @"    set trackAlbum to album of current track\n"
+            @"    set trackDuration to duration of current track\n"
+            @"    set trackPosition to player position\n"
+            @"    set playerStateText to player state as text\n"
+            @"    set trackData to trackName & \"|||\" & trackArtist & \"|||\" & trackAlbum & \"|||\" & trackDuration & \"|||\" & trackPosition & \"|||\" & playerStateText\n"
+            @"    return trackData\n"
+            @"  else\n"
+            @"    return \"stopped\"\n"
+            @"  end if\n"
+            @"end tell", player];
+    } else if ([player isEqualToString:@"Spotify"]) {
+        script =
+            @"tell application \"Spotify\"\n"
+            @"  if player state is playing then\n"
+            @"    set trackName to name of current track\n"
+            @"    set trackArtist to artist of current track\n"
+            @"    set trackAlbum to album of current track\n"
+            @"    set trackDuration to duration of current track\n"
+            @"    set trackPosition to player position\n"
+            @"    set playerStateText to player state as text\n"
+            @"    set trackData to trackName & \"|||\" & trackArtist & \"|||\" & trackAlbum & \"|||\" & trackDuration & \"|||\" & trackPosition & \"|||\" & playerStateText\n"
+            @"    return trackData\n"
+            @"  else\n"
+            @"    return \"stopped\"\n"
+            @"  end if\n"
+            @"end tell";
+    }
+
+    if (script == nil) return nil;
+
+    NSAppleScript *as = [[NSAppleScript alloc] initWithSource:script];
+    NSDictionary *errorInfo = nil;
+    NSAppleEventDescriptor *result = [as executeAndReturnError:&errorInfo];
+
+    if (errorInfo || result == nil) return nil;
+
+    NSString *text = [result stringValue];
+    if (text == nil || [text isEqualToString:@"stopped"] || text.length == 0) {
+        return @{@"STATE": @"0"};
+    }
+
+    NSArray *parts = [text componentsSeparatedByString:@"|||"];
+    if (parts.count < 6) return @{@"STATE": @"0"};
+
+    NSString *state = [parts[5] trimmed];
+    BOOL playing = [state caseInsensitiveCompare:@"playing"] == NSOrderedSame ||
+                   [state caseInsensitiveCompare:@"kPSP"] == NSOrderedSame;
+
+    double duration = [parts[3] doubleValue] / 1000.0; // milliseconds to seconds
+    double position = [parts[4] doubleValue] / 1000.0;
+
+    NSString *durStr = [self formatTime:duration];
+    NSString *posStr = [self formatTime:position];
+
+    return @{
+        @"TITLE":    [parts[0] trimmed],
+        @"ARTIST":   [parts[1] trimmed],
+        @"ALBUM":    [parts[2] trimmed],
+        @"DURATION": durStr,
+        @"POSITION": posStr,
+        @"PROGRESS": [NSString stringWithFormat:@"%.1f", duration > 0 ? position / duration * 100 : 0],
+        @"STATE":    playing ? @"1" : @"0",
+    };
+}
+
+- (NSString *)formatTime:(double)seconds {
+    if (seconds < 0) seconds = 0;
+    long m = (long)(seconds / 60);
+    long s = (long)(seconds) % 60;
+    return [NSString stringWithFormat:@"%ld:%02ld", m, s];
+}
+
 @end
 
 #pragma mark - Battery / Power
@@ -818,7 +998,811 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 }
 @end
 
-#pragma mark - Stub (WebParser / Plugin / unsupported)
+#pragma mark - WebParser (NSURLSession + regex capture)
+
+@interface RMMeasureWebParser () <NSURLSessionDataDelegate> {
+    NSString *_url;
+    NSString *_regexp;
+    int _updateRate;
+    BOOL _debug;
+    NSString *_downloadFile;
+    NSString *_download;
+    NSString *_finishAction;
+    NSMutableDictionary<NSNumber *, NSString *> *_stringIndexes; // index -> capture
+    NSMutableDictionary<NSNumber *, NSString *> *_childMeasures;  // ChildName -> parent measure name
+    NSMutableArray<NSDictionary *> *_matchResults;  // array of dicts {index: value}
+    NSURLSession *_session;
+    NSURLSessionDataTask *_task;
+    NSMutableData *_responseData;
+    BOOL _hasValidData;
+    BOOL _parsing;
+    NSString *_errorString;
+    NSInteger _httpCode;
+    int _ticksSinceLastFetch;
+}
+@end
+
+@implementation RMMeasureWebParser
+
+- (BOOL)isStringMeasure { return YES; }
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _url = [cp readString:self.name key:@"URL" default:nil];
+    _regexp = [cp readString:self.name key:@"RegExp" default:nil];
+    _updateRate = [cp readInt:self.name key:@"UpdateRate" default:600]; // 10 min default like Rainmeter
+    if (_updateRate < 1) _updateRate = 1;
+    _debug = [cp readBool:self.name key:@"Debug" default:NO];
+    _download = [cp readBool:self.name key:@"Download" default:NO] ? @"1" : nil;
+    _downloadFile = [cp readString:self.name key:@"DownloadFile" default:nil];
+    _finishAction = [cp readString:self.name key:@"FinishAction" default:nil];
+
+    // Collect StringIndexN entries for capture groups.
+    _stringIndexes = [NSMutableDictionary dictionary];
+    RMIniSection *sec = [cp.ini sectionNamed:self.name];
+    for (int i = 1; i <= 99; i++) {
+        NSString *key = (i == 1) ? @"StringIndex" : [NSString stringWithFormat:@"StringIndex%d", i];
+        NSString *val = [sec valueForKey:key];
+        if (val.length == 0) { if (i > 1) break; else continue; }
+        _stringIndexes[@(i)] = val;
+    }
+
+    // Child measures: other WebParser measures in the same skin whose URL is this measure's name
+    // in brackets, e.g. URL=[ParentMeasure]. They auto-inherit the regex matches from the parent.
+    _childMeasures = [NSMutableDictionary dictionary];
+
+    // Read RegExpSubstitute/Substitute from parent class via readConditionOptions
+    _hasValidData = NO;
+    _parsing = NO;
+    _errorString = nil;
+    _httpCode = 0;
+    _ticksSinceLastFetch = _updateRate; // Fetch immediately on first tick
+    _matchResults = [NSMutableArray array];
+}
+
+// Called by RMSkin after all measures are created to link child WebParser measures.
+- (void)registerChildMeasureNamed:(NSString *)childName {
+    _childMeasures[childName.uppercaseString] = childName;
+}
+
+- (void)updateValue {
+    self.value = _hasValidData ? 1.0 : 0.0;
+
+    _ticksSinceLastFetch++;
+    if (_ticksSinceLastFetch >= _updateRate) {
+        _ticksSinceLastFetch = 0;
+        [self startFetch];
+    }
+}
+
+- (nullable NSString *)rawString {
+    // Return the first capture group (StringIndex=1) by default.
+    NSDictionary *firstMatch = _matchResults.firstObject;
+    if (firstMatch) {
+        NSString *s = firstMatch[@(1)];
+        if (s) return s;
+    }
+    // Fallback: return entire response body if no regex captures.
+    if (_responseData && _hasValidData) {
+        return [[NSString alloc] initWithData:_responseData encoding:NSUTF8StringEncoding] ?: @"";
+    }
+    if (_errorString) return _errorString;
+    return @"";
+}
+
+// Resolve StringIndex N from the match results, used by child measures.
+- (nullable NSString *)stringForIndex:(int)index {
+    NSDictionary *firstMatch = _matchResults.firstObject;
+    return firstMatch ? firstMatch[@(index)] : nil;
+}
+
+- (BOOL)hasValidData { return _hasValidData; }
+- (nullable NSString *)errorString { return _errorString; }
+- (NSInteger)httpCode { return _httpCode; }
+- (nullable NSString *)downloadFile { return _downloadFile; }
+- (nullable NSString *)finishAction { return _finishAction; }
+
+- (void)startFetch {
+    if (_url.length == 0) return;
+    if (_parsing) return; // Already fetching
+
+    NSString *expandedURL = [self.parser expand:_url];
+    NSURL *nsurl = [NSURL URLWithString:expandedURL];
+    if (!nsurl) {
+        _errorString = [NSString stringWithFormat:@"Invalid URL: %@", expandedURL];
+        return;
+    }
+
+    _parsing = YES;
+    _responseData = [NSMutableData data];
+    _errorString = nil;
+    _httpCode = 0;
+
+    // Use a simple synchronous fetch via dispatch_semaphore for simplicity.
+    // Rainmeter's WebParser uses blocking sockets on worker threads; we do the
+    // same idiomatically via NSURLSession with a completion block.
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    config.timeoutIntervalForRequest = 30;
+    config.timeoutIntervalForResource = 60;
+    _session = [NSURLSession sessionWithConfiguration:config
+                                             delegate:nil
+                                        delegateQueue:[NSOperationQueue new]];
+
+    __weak RMMeasureWebParser *weakSelf = self;
+    _task = [_session dataTaskWithURL:nsurl completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        RMMeasureWebParser *strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (error) {
+            strongSelf->_errorString = error.localizedDescription;
+            strongSelf->_parsing = NO;
+            return;
+        }
+
+        NSHTTPURLResponse *httpResp = nil;
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            httpResp = (NSHTTPURLResponse *)response;
+            strongSelf->_httpCode = httpResp.statusCode;
+        }
+
+        strongSelf->_responseData = [data mutableCopy] ?: [NSMutableData data];
+        strongSelf->_hasValidData = YES;
+
+        if (strongSelf->_download.length && strongSelf->_downloadFile.length) {
+            [strongSelf saveDownloadedFile];
+        }
+
+        if (strongSelf->_regexp.length) {
+            [strongSelf parseWithRegex];
+        }
+
+        strongSelf->_parsing = NO;
+
+        // Fire FinishAction if present.
+        if (strongSelf->_finishAction.length && strongSelf.executeAction) {
+            NSString *wrapped = ([strongSelf->_finishAction hasPrefix:@"["] ? strongSelf->_finishAction
+                                  : [NSString stringWithFormat:@"[%@]", strongSelf->_finishAction]);
+            strongSelf.executeAction(wrapped);
+        }
+    }];
+    [_task resume];
+}
+
+- (void)saveDownloadedFile {
+    NSString *path = [self.parser expand:_downloadFile];
+    path = [path stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+    if (!path.isAbsolutePath) {
+        path = [self.parser.currentPath stringByAppendingPathComponent:path];
+    }
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil error:nil];
+    NSError *err = nil;
+    [_responseData writeToFile:path options:NSDataWritingAtomic error:&err];
+    if (err) {
+        RMLogWarn(@"WebParser download failed: %@ -> %@, error: %@", _url, path, err);
+    } else if (_debug) {
+        RMLogDebug(@"WebParser downloaded %lu bytes to %@", (unsigned long)_responseData.length, path);
+    }
+}
+
+- (void)parseWithRegex {
+    _matchResults = [NSMutableArray array];
+    NSString *body = [[NSString alloc] initWithData:_responseData encoding:NSUTF8StringEncoding];
+    if (!body && _responseData.length > 0) {
+        body = [[NSString alloc] initWithData:_responseData encoding:NSISOLatin1StringEncoding];
+    }
+    if (!body) return;
+
+    NSError *err = nil;
+    NSString *pattern = [self.parser expand:_regexp];
+    NSRegularExpressionOptions opts = NSRegularExpressionDotMatchesLineSeparators;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pattern
+                                                                        options:opts
+                                                                          error:&err];
+    if (err) {
+        RMLogWarn(@"WebParser RegExp error: %@", err);
+        _errorString = [NSString stringWithFormat:@"RegExp error: %@", err.localizedDescription];
+        return;
+    }
+
+    NSArray<NSTextCheckingResult *> *matches = [re matchesInString:body
+                                                            options:0
+                                                              range:NSMakeRange(0, body.length)];
+
+    for (NSTextCheckingResult *match in matches) {
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        for (NSUInteger i = 0; i <= match.numberOfRanges && i <= 99; i++) {
+            NSRange r = (i < match.numberOfRanges) ? [match rangeAtIndex:i] : NSMakeRange(NSNotFound, 0);
+            if (r.location != NSNotFound) {
+                entry[@(i)] = [body substringWithRange:r];
+            } else {
+                entry[@(i)] = @"";
+            }
+        }
+        [_matchResults addObject:entry];
+    }
+
+    // Also capture full body as match index 0
+    if (_matchResults.count == 0) {
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        entry[@(0)] = body;
+        [_matchResults addObject:entry];
+    }
+
+    if (_debug) {
+        RMLogDebug(@"WebParser: %lu matches for '%@'", (unsigned long)_matchResults.count, _url);
+    }
+}
+
+@end
+
+#pragma mark - RunCommand (NSTask shell execution)
+
+@implementation RMMeasureRunCommand {
+    NSString *_program;
+    NSString *_parameter;
+    NSString *_outputType;
+    NSString *_state;
+    int _timeout;
+    NSString *_finishAction;
+    NSString *_lastOutput;
+    double _lastExitCode;
+    BOOL _running;
+}
+
+- (BOOL)isStringMeasure { return YES; }
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _program = [cp readString:self.name key:@"Program" default:nil];
+    _parameter = [cp readString:self.name key:@"Parameter" default:@""];
+    _outputType = ([cp readString:self.name key:@"OutputType" default:@"UTF8"]).uppercaseString;
+    _state = ([cp readString:self.name key:@"State" default:@"Hide"]).uppercaseString;
+    _timeout = [cp readInt:self.name key:@"Timeout" default:0];
+    _finishAction = [cp readString:self.name key:@"FinishAction" default:nil];
+    _lastOutput = @"";
+    _lastExitCode = -1;
+    _running = NO;
+}
+
+- (void)updateValue {
+    // Only launch once, not on every tick. State=Hide (default) means no terminal window.
+    if (_running) return;
+
+    // Only launch if we haven't run yet or have no data.
+    if (_lastExitCode >= 0 && _lastOutput.length == 0) return;
+
+    if (_program.length == 0) return;
+    [self launchCommand];
+}
+
+- (void)launchCommand {
+    _running = YES;
+    NSString *program = [self.parser expand:_program];
+    NSString *parameter = [self.parser expand:_parameter];
+
+    __weak RMMeasureRunCommand *weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        RMMeasureRunCommand *strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        NSTask *task = [[NSTask alloc] init];
+
+        // Resolve the program path. If it's just a name (e.g. "python3"), look up via /usr/bin/env.
+        NSString *launchPath = program;
+        if (![program hasPrefix:@"/"] && ![program hasPrefix:@"."]) {
+            NSTask *which = [[NSTask alloc] init];
+            which.launchPath = @"/usr/bin/env";
+            which.arguments = @[@"which", program];
+            NSPipe *pipe = [NSPipe pipe];
+            which.standardOutput = pipe;
+            which.standardError = [NSFileHandle fileHandleWithNullDevice];
+            @try {
+                [which launch];
+                [which waitUntilExit];
+                NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+                NSString *found = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                found = [found stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                if (found.length > 0 && which.terminationStatus == 0) {
+                    launchPath = found;
+                }
+            } @catch (NSException *e) {
+                // fall through to try `program` as-is
+            }
+        }
+
+        task.launchPath = launchPath;
+
+        // Parse parameters: split by space, respecting quotes.
+        if (parameter.length > 0) {
+            NSMutableArray *args = [NSMutableArray array];
+            [self tokenizeArguments:parameter into:args];
+            task.arguments = args;
+        } else {
+            task.arguments = @[];
+        }
+
+        NSPipe *outPipe = [NSPipe pipe];
+        NSPipe *errPipe = [NSPipe pipe];
+        task.standardOutput = outPipe;
+        task.standardError = errPipe;
+
+        @try {
+            [task launch];
+
+            if (strongSelf->_timeout > 0) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(strongSelf->_timeout * NSEC_PER_SEC)),
+                               dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                    if (task.isRunning) [task terminate];
+                });
+            }
+
+            [task waitUntilExit];
+
+            NSData *outData = [[outPipe fileHandleForReading] readDataToEndOfFile];
+            NSData *errData = [[errPipe fileHandleForReading] readDataToEndOfFile];
+
+            NSString *output = @"";
+            if (outData.length > 0) {
+                NSStringEncoding enc = [strongSelf->_outputType isEqualToString:@"ANSI"] ?
+                    NSISOLatin1StringEncoding : NSUTF8StringEncoding;
+                output = [[NSString alloc] initWithData:outData encoding:enc] ?: @"";
+            }
+            if (errData.length > 0 && output.length == 0) {
+                output = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] ?: @"";
+            }
+
+            strongSelf->_lastOutput = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            strongSelf->_lastExitCode = (double)task.terminationStatus;
+
+        } @catch (NSException *e) {
+            strongSelf->_lastOutput = @"";
+            strongSelf->_lastExitCode = -1;
+            RMLogWarn(@"RunCommand failed: %@", e);
+        }
+
+        strongSelf->_running = NO;
+
+        if (strongSelf->_finishAction.length && strongSelf.executeAction) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSString *wrapped = ([strongSelf->_finishAction hasPrefix:@"["] ? strongSelf->_finishAction
+                                      : [NSString stringWithFormat:@"[%@]", strongSelf->_finishAction]);
+                strongSelf.executeAction(wrapped);
+            });
+        }
+    });
+}
+
+- (void)tokenizeArguments:(NSString *)str into:(NSMutableArray<NSString *> *)args {
+    NSUInteger i = 0, n = str.length;
+    NSMutableString *cur = [NSMutableString string];
+    BOOL inQuote = NO; unichar q = '"';
+    while (i < n) {
+        unichar c = [str characterAtIndex:i];
+        if (inQuote) {
+            if (c == q) { inQuote = NO; }
+            else [cur appendFormat:@"%C", c];
+        } else {
+            if (c == '"' || c == '\'') { inQuote = YES; q = c; }
+            else if (c == ' ' || c == '\t') {
+                if (cur.length > 0) { [args addObject:cur.copy]; [cur setString:@""]; }
+            } else {
+                [cur appendFormat:@"%C", c];
+            }
+        }
+        i++;
+    }
+    if (cur.length > 0) [args addObject:cur.copy];
+}
+
+- (nullable NSString *)rawString {
+    return _lastOutput ?: @"";
+}
+
+- (void)updateValueCore {
+    self.value = _lastExitCode;
+}
+
+@end
+
+#pragma mark - FolderInfo
+
+@implementation RMMeasureFolderInfo {
+    NSString *_folder;
+    BOOL _includeSubFolders;
+    NSString *_type; // FileCount, FolderCount, Size
+}
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _folder = [cp readString:self.name key:@"Folder" default:cp.currentPath];
+    _folder = [cp expand:_folder];
+    _folder = [_folder stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+    _includeSubFolders = [cp readBool:self.name key:@"IncludeSubFolders" default:NO];
+    _type = ([cp readString:self.name key:@"Type" default:@"FileCount"]).uppercaseString;
+}
+
+- (void)updateValue {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:_folder isDirectory:&isDir]) {
+        self.value = 0;
+        return;
+    }
+
+    if ([_type isEqualToString:@"FOLDERCOUNT"]) {
+        if (!isDir) { self.value = 0; return; }
+        self.value = [self countItems:_folder ofType:YES manager:fm recursive:_includeSubFolders];
+    } else if ([_type isEqualToString:@"FILECOUNT"]) {
+        if (!isDir) { self.value = 1; return; }
+        self.value = [self countItems:_folder ofType:NO manager:fm recursive:_includeSubFolders];
+    } else if ([_type isEqualToString:@"SIZE"]) {
+        if (!isDir) {
+            NSDictionary *attrs = [fm attributesOfItemAtPath:_folder error:nil];
+            self.value = (double)[attrs[NSFileSize] unsignedLongLongValue];
+            return;
+        }
+        self.value = [self calcSize:_folder manager:fm recursive:_includeSubFolders];
+    }
+    self.maxValue = MAX(self.value, self.maxValue);
+}
+
+- (NSUInteger)countItems:(NSString *)path ofType:(BOOL)folders
+                manager:(NSFileManager *)fm recursive:(BOOL)recursive {
+    NSUInteger count = 0;
+    NSArray *items = [fm contentsOfDirectoryAtPath:path error:nil];
+    for (NSString *item in items) {
+        NSString *full = [path stringByAppendingPathComponent:item];
+        BOOL isDir = NO;
+        [fm fileExistsAtPath:full isDirectory:&isDir];
+        if (isDir == folders) count++;
+        if (isDir && recursive) {
+            count += [self countItems:full ofType:folders manager:fm recursive:YES];
+        }
+    }
+    return count;
+}
+
+- (double)calcSize:(NSString *)path manager:(NSFileManager *)fm recursive:(BOOL)recursive {
+    double total = 0;
+    NSArray *items = [fm contentsOfDirectoryAtPath:path error:nil];
+    for (NSString *item in items) {
+        NSString *full = [path stringByAppendingPathComponent:item];
+        BOOL isDir = NO;
+        [fm fileExistsAtPath:full isDirectory:&isDir];
+        if (isDir) {
+            if (recursive) total += [self calcSize:full manager:fm recursive:YES];
+        } else {
+            NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+            total += (double)[attrs[NSFileSize] unsignedLongLongValue];
+        }
+    }
+    return total;
+}
+
+@end
+
+#pragma mark - Registry (macOS: NSUserDefaults / plist)
+
+@implementation RMMeasureRegistry {
+    NSString *_regKey;
+    NSString *_regValue;
+    BOOL _isString;
+}
+
+- (BOOL)isStringMeasure { return _isString; }
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _regKey = [cp readString:self.name key:@"RegKey" default:nil];
+    _regValue = [cp readString:self.name key:@"RegValue" default:nil];
+    // If the key looks like a path to a plist file, read from that;
+    // otherwise use NSUserDefaults (Rainmeter's registry maps to macOS defaults).
+    _isString = YES;
+}
+
+- (void)updateValue {
+    self.value = 0;
+    if (_regKey.length == 0 || _regValue.length == 0) return;
+
+    // Try plist file first, then NSUserDefaults.
+    NSString *expandedKey = [self.parser expand:_regKey];
+    NSString *expandedValue = [self.parser expand:_regValue];
+
+    // Rainmeter HKEY_CURRENT_USER\Software\... maps to NSUserDefaults domain.
+    // We support direct plist paths too.
+    NSString *keyNorm = [expandedKey stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+
+    if (keyNorm.isAbsolutePath && [[NSFileManager defaultManager] fileExistsAtPath:keyNorm]) {
+        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:keyNorm];
+        id val = plist[expandedValue];
+        if ([val isKindOfClass:[NSNumber class]]) {
+            self.value = [val doubleValue];
+        } else if ([val isKindOfClass:[NSString class]]) {
+            double d = 0;
+            if ([[NSScanner scannerWithString:val] scanDouble:&d]) self.value = d;
+        }
+    } else {
+        // Use CFPreferences for the given domain (macOS equivalent of HKCU registry).
+        NSString *domain = (keyNorm.length > 0) ? keyNorm : (NSString *)kCFPreferencesCurrentApplication;
+        CFPropertyListRef val = CFPreferencesCopyValue((__bridge CFStringRef)expandedValue,
+                                                        (__bridge CFStringRef)domain,
+                                                        kCFPreferencesCurrentUser,
+                                                        kCFPreferencesAnyHost);
+        if (val) {
+            if (CFGetTypeID(val) == CFNumberGetTypeID()) {
+                CFNumberGetValue(val, kCFNumberDoubleType, &_value);
+            } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
+                double d = 0;
+                if ([[NSScanner scannerWithString:(__bridge NSString *)val] scanDouble:&d]) self.value = d;
+            } else if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
+                self.value = CFBooleanGetValue(val) ? 1.0 : 0.0;
+            }
+            CFRelease(val);
+        }
+    }
+}
+
+- (nullable NSString *)rawString {
+    if (!_isString) return nil;
+    NSString *expandedKey = [self.parser expand:_regKey];
+    NSString *expandedValue = [self.parser expand:_regValue];
+    if (expandedKey.length == 0 || expandedValue.length == 0) return @"";
+
+    NSString *keyNorm = [expandedKey stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+    if (keyNorm.isAbsolutePath && [[NSFileManager defaultManager] fileExistsAtPath:keyNorm]) {
+        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:keyNorm];
+        id val = plist[expandedValue];
+        if ([val isKindOfClass:[NSString class]]) return val;
+        if ([val isKindOfClass:[NSNumber class]]) return [val stringValue];
+        return @"";
+    }
+
+    NSString *domain = (keyNorm.length > 0) ? keyNorm : (NSString *)kCFPreferencesCurrentApplication;
+    CFPropertyListRef val = CFPreferencesCopyValue((__bridge CFStringRef)expandedValue,
+                                                    (__bridge CFStringRef)domain,
+                                                    kCFPreferencesCurrentUser,
+                                                    kCFPreferencesAnyHost);
+    if (val) {
+        NSString *result = @"";
+        if (CFGetTypeID(val) == CFStringGetTypeID()) {
+            result = (__bridge NSString *)val;
+        } else if (CFGetTypeID(val) == CFNumberGetTypeID()) {
+            result = [(__bridge NSNumber *)val stringValue];
+        } else if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
+            result = CFBooleanGetValue(val) ? @"1" : @"0";
+        }
+        CFRelease(val);
+        return result;
+    }
+    return @"";
+}
+
+@end
+
+#pragma mark - RecycleManager (macOS: ~/.Trash)
+
+@implementation RMMeasureRecycleManager {
+    NSString *_type; // Count, Size
+    NSString *_drive; // Ignored on macOS, single trash
+}
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _type = ([cp readString:self.name key:@"Type" default:@"Count"]).uppercaseString;
+    _drive = [cp readString:self.name key:@"Drives" default:nil];
+}
+
+- (void)updateValue {
+    NSString *trashPath = [NSHomeDirectory() stringByAppendingPathComponent:@".Trash"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    if ([_type isEqualToString:@"SIZE"]) {
+        double total = 0;
+        NSArray *items = [fm contentsOfDirectoryAtPath:trashPath error:nil];
+        for (NSString *item in items) {
+            NSString *full = [trashPath stringByAppendingPathComponent:item];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+            total += (double)[attrs[NSFileSize] unsignedLongLongValue];
+        }
+        self.value = total;
+        self.maxValue = MAX(total, self.maxValue);
+    } else {
+        // Count (default)
+        NSArray *items = [fm contentsOfDirectoryAtPath:trashPath error:nil];
+        // Filter out .DS_Store
+        NSUInteger count = 0;
+        for (NSString *item in items) {
+            if (![item hasPrefix:@"."]) count++;
+        }
+        self.value = (double)count;
+        self.maxValue = MAX((double)count, self.maxValue);
+    }
+}
+
+@end
+
+#pragma mark - WiFiStatus (CoreWLAN)
+
+@import CoreWLAN;
+
+@implementation RMMeasureWiFiStatus {
+    NSString *_infoType; // SSID, Quality, Encryption, Description, PHY, Authenticated,
+                          // Channel, IPAddress, SubnetMask, Gateway, DNS
+    BOOL _isString;
+}
+
+- (BOOL)isStringMeasure { return _isString; }
+
+- (void)readSubclassOptions {
+    RMConfigParser *cp = self.parser;
+    _infoType = ([cp readString:self.name key:@"WiFiInfoType" default:@"SSID"]).uppercaseString;
+    _isString = ![@[@"QUALITY", @"CHANNEL"] containsObject:_infoType];
+}
+
+- (void)updateValue {
+    self.value = 0;
+    CWInterface *wifi = [[CWWiFiClient sharedWiFiClient] interface];
+    if (!wifi) return;
+
+    if ([_infoType isEqualToString:@"SSID"]) {
+        self.value = wifi.ssid.length > 0 ? 1 : 0;
+    } else if ([_infoType isEqualToString:@"QUALITY"]) {
+        // RSSI mapped to 0-100 scale. Typical RSSI: -30 (excellent) to -90 (poor).
+        double rssi = wifi.rssiValue;
+        if (rssi < 0) {
+            // Map -90..-30 to 0..100
+            self.value = MAX(0, MIN(100, (rssi + 90) / 60.0 * 100.0));
+        }
+    } else if ([_infoType isEqualToString:@"ENCRYPTION"]) {
+        self.value = wifi.security != kCWSecurityNone ? 1 : 0;
+    } else if ([_infoType isEqualToString:@"AUTHENTICATED"]) {
+        self.value = (wifi.ssid.length > 0) ? 1 : 0;
+    } else if ([_infoType isEqualToString:@"CHANNEL"]) {
+        CWChannel *ch = wifi.wlanChannel;
+        self.value = (double)ch.channelNumber;
+    } else if ([_infoType isEqualToString:@"PHY"]) {
+        self.value = 1; // Always have some PHY if connected
+    } else if ([_infoType isEqualToString:@"IPADDRESS"] ||
+               [_infoType isEqualToString:@"SUBNETMASK"] ||
+               [_infoType isEqualToString:@"GATEWAY"] ||
+               [_infoType isEqualToString:@"DNS"]) {
+        self.value = [self resolveIPField] ? 1 : 0;
+    } else {
+        self.value = 0;
+    }
+    self.maxValue = MAX(self.value, 100);
+}
+
+- (nullable NSString *)rawString {
+    if (!_isString) return nil;
+    CWInterface *wifi = [[CWWiFiClient sharedWiFiClient] interface];
+    if (!wifi) return @"";
+
+    if ([_infoType isEqualToString:@"SSID"]) return wifi.ssid ?: @"";
+    if ([_infoType isEqualToString:@"ENCRYPTION"] || [_infoType isEqualToString:@"DESCRIPTION"]) {
+        switch (wifi.security) {
+            case kCWSecurityNone: return @"None";
+            case kCWSecurityWEP: return @"WEP";
+            case kCWSecurityWPAPersonal: return @"WPA-Personal";
+            case kCWSecurityWPAPersonalMixed: return @"WPA-Personal-Mixed";
+            case kCWSecurityWPA2Personal: return @"WPA2-Personal";
+            case kCWSecurityPersonal: return @"Personal";
+            case kCWSecurityDynamicWEP: return @"Dynamic WEP";
+            case kCWSecurityWPAEnterprise: return @"WPA-Enterprise";
+            case kCWSecurityWPAEnterpriseMixed: return @"WPA-Enterprise-Mixed";
+            case kCWSecurityWPA2Enterprise: return @"WPA2-Enterprise";
+            case kCWSecurityEnterprise: return @"Enterprise";
+            case kCWSecurityWPA3Personal: return @"WPA3-Personal";
+            case kCWSecurityWPA3Enterprise: return @"WPA3-Enterprise";
+            case kCWSecurityWPA3Transition: return @"WPA3-Transition";
+            default: return @"Unknown";
+        }
+    }
+    if ([_infoType isEqualToString:@"PHY"]) {
+        switch (wifi.activePHYMode) {
+            case kCWPHYMode11a: return @"802.11a";
+            case kCWPHYMode11b: return @"802.11b";
+            case kCWPHYMode11g: return @"802.11g";
+            case kCWPHYMode11n: return @"802.11n";
+            case kCWPHYMode11ac: return @"802.11ac";
+            case kCWPHYMode11ax: return @"802.11ax";
+            default: return @"Unknown";
+        }
+    }
+    if ([_infoType isEqualToString:@"AUTHENTICATED"]) {
+        return wifi.ssid.length > 0 ? @"1" : @"0";
+    }
+    if ([_infoType isEqualToString:@"CHANNEL"]) {
+        CWChannel *ch = wifi.wlanChannel;
+        return [NSString stringWithFormat:@"%ld", (long)ch.channelNumber];
+    }
+    if ([_infoType isEqualToString:@"IPADDRESS"] ||
+        [_infoType isEqualToString:@"SUBNETMASK"] ||
+        [_infoType isEqualToString:@"GATEWAY"] ||
+        [_infoType isEqualToString:@"DNS"]) {
+        return [self resolveIPFieldString] ?: @"";
+    }
+    return @"";
+}
+
+- (BOOL)resolveIPField {
+    return [self resolveIPFieldString] != nil;
+}
+
+- (nullable NSString *)resolveIPFieldString {
+    // Use getifaddrs to find the Wi-Fi interface address.
+    struct ifaddrs *ifs = NULL;
+    if (getifaddrs(&ifs) != 0) return nil;
+
+    NSString *result = nil;
+    for (struct ifaddrs *ifa = ifs; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        // Look for "en0" or "en1" (Wi-Fi) interfaces.
+        NSString *name = @(ifa->ifa_name);
+        if (![name hasPrefix:@"en"]) continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            char buf[INET_ADDRSTRLEN];
+            struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+
+            if ([_infoType isEqualToString:@"IPADDRESS"]) {
+                if (inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf))) {
+                    result = @(buf);
+                    break;
+                }
+            } else if ([_infoType isEqualToString:@"SUBNETMASK"]) {
+                struct sockaddr_in *nm = (struct sockaddr_in *)ifa->ifa_netmask;
+                if (nm && inet_ntop(AF_INET, &nm->sin_addr, buf, sizeof(buf))) {
+                    result = @(buf);
+                    break;
+                }
+            } else if ([_infoType isEqualToString:@"GATEWAY"]) {
+                // Gateway is not directly available via getifaddrs.
+                // Return a placeholder.
+                result = @"0.0.0.0";
+                break;
+            } else if ([_infoType isEqualToString:@"DNS"]) {
+                result = @"0.0.0.0"; // DNS requires SystemConfiguration resolver API
+                break;
+            }
+        }
+    }
+    freeifaddrs(ifs);
+    return result;
+}
+
+@end
+
+#pragma mark - String (simple string measure)
+
+@implementation RMMeasureString {
+    NSString *_text;
+}
+
+- (BOOL)isStringMeasure { return YES; }
+
+- (void)readSubclassOptions {
+    _text = [self.parser readString:self.name key:@"Text" default:@""];
+}
+
+- (void)updateValue {
+    self.value = 0;
+    double d = 0;
+    if (_text.length > 0 && [[NSScanner scannerWithString:_text] scanDouble:&d]) {
+        self.value = d;
+    }
+}
+
+- (nullable NSString *)rawString {
+    return _text ?: @"";
+}
+
+@end
+
+#pragma mark - Stub (Plugin / unsupported)
 
 @implementation RMMeasureStub
 - (BOOL)isStringMeasure { return YES; }
