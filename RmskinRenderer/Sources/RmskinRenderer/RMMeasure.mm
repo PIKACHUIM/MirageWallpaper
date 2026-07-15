@@ -1572,7 +1572,7 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
         } else if (CFGetTypeID(val) == CFNumberGetTypeID()) {
             result = [(__bridge NSNumber *)val stringValue];
         } else if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
-            result = CFBooleanGetValue(val) ? @"1" : @"0";
+            result = CFBooleanGetValue((CFBooleanRef)val) ? @"1" : @"0";
         }
         CFRelease(val);
         return result;
@@ -1810,46 +1810,4 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 - (void)updateValue { self.value = 0; }
 @end
 
-#pragma mark - Stub implementations for Windows-only / unimplemented measure types
 
-@implementation RMMeasureWiFiStatus
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @"N/A"; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureFolderInfo
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @""; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureRecycleManager
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @"0 B"; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureRegistry
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @""; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureRunCommand
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @""; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureString
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @""; }
-- (void)updateValue { self.value = 0; }
-@end
-
-@implementation RMMeasureWebParser
-- (BOOL)isStringMeasure { return YES; }
-- (nullable NSString *)rawString { return @""; }
-- (void)updateValue { self.value = 0; }
-@end

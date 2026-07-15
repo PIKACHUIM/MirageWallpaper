@@ -32,7 +32,7 @@ class StableHostingView<Content: View>: NSHostingView<Content> {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required dynamic init?(coder: NSCoder) { fatalError() }
 
     // 拦截任何试图切换回 Auto Layout 的行为
     override var translatesAutoresizingMaskIntoConstraints: Bool {
