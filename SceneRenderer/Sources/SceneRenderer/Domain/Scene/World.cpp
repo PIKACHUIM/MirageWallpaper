@@ -67,13 +67,20 @@ float animation_frame(const SceneAnimationCurve& curve, double runtime) {
     float end   = curve_end_frame(curve);
     if (end <= 0.0f) return frame;
 
-    bool loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
+    const float end_frame = end;
+    bool        loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
     if (loop) {
-        frame = std::fmod(frame, static_cast<float>(end));
-        if (frame < 0.0f) frame += static_cast<float>(end);
+        frame = std::fmod(frame, end_frame);
+        if (frame < 0.0f) frame += end_frame;
         return frame;
     }
-    return std::clamp(frame, 0.0f, static_cast<float>(end));
+    if (curve.mode == "mirror") {
+        const float period = 2.0f * end_frame;
+        float       folded = std::fmod(frame, period);
+        if (folded < 0.0f) folded += period;
+        return folded <= end_frame ? folded : (period - folded);
+    }
+    return std::clamp(frame, 0.0f, end_frame);
 }
 
 float eval_segment(const SceneAnimationKey& a, const SceneAnimationKey& b, float frame) {
