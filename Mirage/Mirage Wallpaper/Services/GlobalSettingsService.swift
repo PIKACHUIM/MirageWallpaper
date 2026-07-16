@@ -226,7 +226,12 @@ class GlobalSettingsViewModel: ObservableObject {
             workspacePlaybackObservers.append(observer)
         }
         desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            self?.schedulePlaybackEvaluation()
+            guard let self else { return }
+            // At mouse-down the windows are still in place, so hit-testing the
+            // click point tells us whether the user clicked empty desktop (a
+            // reveal-desktop gesture) or focused an app window.
+            self.desktopRevealed = self.clickLandedOnDesktop(at: NSEvent.mouseLocation)
+            self.schedulePlaybackEvaluation()
         }
 
         self.playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -242,6 +247,7 @@ class GlobalSettingsViewModel: ObservableObject {
     private var playbackEvalWorkItem: DispatchWorkItem?
     private var workspacePlaybackObservers: [NSObjectProtocol] = []
     private var desktopClickMonitor: Any?
+    private var desktopRevealed = false
     private(set) var effectivePlaybackAction = GSPlayback.keepRunning
 
     @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
@@ -351,6 +357,14 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func activateApplicationDidChange() {
+        // A reveal-desktop gesture never changes the frontmost app, so any
+        // genuine activation of another regular app means the desktop is no
+        // longer being viewed. Clear the latch so focus rules apply again.
+        let front = NSWorkspace.shared.frontmostApplication
+        let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        if let front, front.activationPolicy == .regular, !isSelf {
+            desktopRevealed = false
+        }
         evaluatePlaybackState()
     }
 
@@ -363,11 +377,15 @@ class GlobalSettingsViewModel: ObservableObject {
 
         let front = NSWorkspace.shared.frontmostApplication
         let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        let desktopExposed = isDesktopExposed()
+        // The desktop is being viewed if the user latched a reveal gesture by
+        // clicking empty desktop, or if window geometry currently shows no app
+        // window covering a screen. The latch survives the reveal animation,
+        // which the geometry heuristic alone cannot reliably observe.
+        let desktopViewed = desktopRevealed || isDesktopExposed()
         let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
             && !appHasVisibleWindows(pid: front?.processIdentifier)
 
-        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder, !desktopExposed {
+        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder, !desktopViewed {
             if appIsFullscreen(pid: front.processIdentifier) {
                 actions.append(settings.otherApplicationFullscreen)
             } else {
@@ -475,6 +493,46 @@ class GlobalSettingsViewModel: ObservableObject {
             }
         }
         return false
+    }
+
+    /// Hit-test the click point against the on-screen window list to decide
+    /// whether the user clicked empty desktop (a reveal-desktop gesture) rather
+    /// than an app window. Evaluated at mouse-down, before any reveal animation
+    /// moves windows, so it does not depend on transient window geometry.
+    private func clickLandedOnDesktop(at screenPoint: NSPoint) -> Bool {
+        // NSEvent.mouseLocation is in AppKit coordinates (origin bottom-left of
+        // the main screen). CGWindowList bounds are in CoreGraphics coordinates
+        // (origin top-left). Flip Y using the primary display height.
+        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main else {
+            return false
+        }
+        let cgPoint = CGPoint(x: screenPoint.x, y: primary.frame.height - screenPoint.y)
+
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+        let rendererPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
+        let selfPID = ProcessInfo.processInfo.processIdentifier
+        let applications = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map {
+            ($0.processIdentifier, $0)
+        })
+
+        // Windows are returned front-to-back, so the first regular-app window
+        // containing the point is the one the click would land on.
+        for info in windows {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  pid != selfPID, !rendererPIDs.contains(pid),
+                  let app = applications[pid], app.activationPolicy == .regular,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary) else { continue }
+
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            guard alpha > 0.05 else { continue }
+            if bounds.contains(cgPoint) {
+                return false
+            }
+        }
+        return true
     }
 
     private func isDesktopExposed() -> Bool {
