@@ -8,6 +8,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Combine
 
+struct ScreenSaverFeedback: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
 class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name
     @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase
@@ -43,6 +49,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @Published var hoveredWallpaper: WEWallpaper?
     
     @Published var isUnsubscribeConfirming = false
+
+    @Published var screenSaverFeedback: ScreenSaverFeedback?
 
     @Published var searchText = "" { didSet { currentPage = 1 } }
 

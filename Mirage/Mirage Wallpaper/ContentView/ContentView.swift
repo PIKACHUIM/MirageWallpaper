@@ -133,6 +133,13 @@ struct ContentView: View {
             Text("确定要删除“\(viewModel.hoveredWallpaper?.project.title ?? "该壁纸")”吗？")
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
+        .alert(item: $viewModel.screenSaverFeedback) { feedback in
+            Alert(
+                title: Text(feedback.title),
+                message: Text(feedback.message),
+                dismissButton: .default(Text("好"))
+            )
+        }
         .alert(
             "需要基础壁纸",
             isPresented: Binding(

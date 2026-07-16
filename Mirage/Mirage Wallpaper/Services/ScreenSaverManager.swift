@@ -37,7 +37,9 @@ final class ScreenSaverManager {
     private let fingerprintPaths = [
         "Contents/Info.plist",
         "Contents/MacOS/MirageScreenSaver",
-        "Contents/Frameworks/libMirageSceneSaver.dylib"
+        "Contents/Frameworks/libMirageSceneSaver.dylib",
+        "Contents/Resources/thumbnail.png",
+        "Contents/Resources/thumbnail@2x.png"
     ]
 
     var installedURL: URL {

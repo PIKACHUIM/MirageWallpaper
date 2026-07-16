@@ -153,8 +153,13 @@ class WallpaperViewModel: ObservableObject {
     // MARK: 属性合并
 
     func effectiveProperties(for w: WEWallpaper) -> [String: WEProjectProperty] {
+        effectiveProperties(for: w, runtime: runtime)
+    }
+
+    func effectiveProperties(for w: WEWallpaper,
+                             runtime runtimeState: WallpaperRuntimeState) -> [String: WEProjectProperty] {
         var result = w.project.general?.properties?.items ?? [:]
-        for (key, override) in runtime.propertyOverrides {
+        for (key, override) in runtimeState.propertyOverrides {
             if var prop = result[key] {
                 prop.value = override
                 result[key] = prop
