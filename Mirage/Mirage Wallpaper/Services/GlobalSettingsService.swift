@@ -181,8 +181,11 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func didFinishLaunchingNotification() {
+        // NSWorkspace posts activation notifications on its own notification
+        // center, not the default one, so subscribe there or the handler never
+        // fires and the reveal latch never clears on app switches.
         self.didActivateApplicationNotificationCancellable =
-        NotificationCenter.default.publisher(for: NSWorkspace.didActivateApplicationNotification)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .sink { [weak self] _ in self?.activateApplicationDidChange() }
         
         self.didCurrentWallpaperChangeCancellable =
@@ -227,10 +230,17 @@ class GlobalSettingsViewModel: ObservableObject {
         }
         desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
             guard let self else { return }
-            // At mouse-down the windows are still in place, so hit-testing the
-            // click point tells us whether the user clicked empty desktop (a
-            // reveal-desktop gesture) or focused an app window.
-            self.desktopRevealed = self.clickLandedOnDesktop(at: NSEvent.mouseLocation)
+            // A click on bare desktop toggles the reveal: the first one reveals
+            // the desktop (windows slide away), the next one collapses it back.
+            // Both clicks hit-test as "on desktop" because the windows are off
+            // screen while revealed, so we must toggle rather than assign.
+            // A click that lands on any on-screen UI (an app window, the Dock,
+            // the menu bar) is never a reveal gesture and clears the latch.
+            if self.clickLandedOnDesktop(at: NSEvent.mouseLocation) {
+                self.desktopRevealed.toggle()
+            } else {
+                self.desktopRevealed = false
+            }
             self.schedulePlaybackEvaluation()
         }
 
@@ -496,8 +506,8 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     /// Hit-test the click point against the on-screen window list to decide
-    /// whether the user clicked empty desktop (a reveal-desktop gesture) rather
-    /// than an app window. Evaluated at mouse-down, before any reveal animation
+    /// whether the user clicked bare desktop (a reveal-desktop gesture) rather
+    /// than any on-screen UI. Evaluated at mouse-down, before a reveal animation
     /// moves windows, so it does not depend on transient window geometry.
     private func clickLandedOnDesktop(at screenPoint: NSPoint) -> Bool {
         // NSEvent.mouseLocation is in AppKit coordinates (origin bottom-left of
@@ -512,17 +522,16 @@ class GlobalSettingsViewModel: ObservableObject {
         let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
         let rendererPIDs = AppDelegate.shared.wallpaperViewModel.renderer.processIdentifiers
         let selfPID = ProcessInfo.processInfo.processIdentifier
-        let applications = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map {
-            ($0.processIdentifier, $0)
-        })
 
-        // Windows are returned front-to-back, so the first regular-app window
-        // containing the point is the one the click would land on.
+        // The click lands on the desktop only if no on-screen window sits under
+        // the cursor. We deliberately include chrome such as the Dock, the menu
+        // bar and Control Center (positive window layers, non-regular owners) so
+        // that clicking them is never mistaken for a reveal gesture. Windows are
+        // returned front-to-back; the first one containing the point wins.
         for info in windows {
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer >= 0,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t,
                   pid != selfPID, !rendererPIDs.contains(pid),
-                  let app = applications[pid], app.activationPolicy == .regular,
                   let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary) else { continue }
 
