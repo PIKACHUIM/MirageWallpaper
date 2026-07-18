@@ -744,7 +744,9 @@ final class RendererController {
             // using the "scenetexture" wire type.
             cmd["type"] = "scenetexture"
             cmd["value"] = property.value.stringValue
-        case .combo, .textinput, .text, .group, .directory, .usershortcut, .unknown:
+        case .combo:
+            cmd["value"] = property.value.jsonObjectValue
+        case .textinput, .text, .group, .directory, .usershortcut, .unknown:
             cmd["value"] = property.value.stringValue
         }
         return cmd
@@ -763,6 +765,8 @@ final class RendererController {
                 obj[key] = prop.value.doubleValue
             case .scenetexture, .file:
                 obj[key] = ["type": "scenetexture", "value": prop.value.stringValue]
+            case .combo:
+                obj[key] = prop.value.jsonObjectValue
             default:
                 obj[key] = prop.value.stringValue
             }

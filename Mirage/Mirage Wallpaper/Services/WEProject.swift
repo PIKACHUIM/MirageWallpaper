@@ -67,31 +67,34 @@ enum WEPropertyValue: Codable, Equatable, Hashable {
         case .string(let s): return s
         }
     }
+
+    // Value suitable for JSONSerialization while preserving the manifest's
+    // primitive type. In particular, WE combo values may be numbers or bools;
+    // converting them to display strings breaks strict JavaScript comparisons.
+    var jsonObjectValue: Any {
+        switch self {
+        case .bool(let b): return b
+        case .number(let d): return d
+        case .string(let s): return s
+        }
+    }
 }
 
 // MARK: - 属性选项
 
 struct WEProjectPropertyOption: Codable, Equatable, Hashable {
     var label: String
-    var value: String
+    var value: WEPropertyValue
     var condition: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.label = (try? c.decode(String.self, forKey: .label)) ?? ""
         self.condition = try? c.decode(String.self, forKey: .condition)
-        if let s = try? c.decode(String.self, forKey: .value) {
-            self.value = s
-        } else if let i = try? c.decode(Int.self, forKey: .value) {
-            self.value = String(i)
-        } else if let d = try? c.decode(Double.self, forKey: .value) {
-            self.value = String(d)
-        } else {
-            self.value = ""
-        }
+        self.value = (try? c.decode(WEPropertyValue.self, forKey: .value)) ?? .string("")
     }
 
-    init(label: String, value: String, condition: String? = nil) {
+    init(label: String, value: WEPropertyValue, condition: String? = nil) {
         self.label = label
         self.value = value
         self.condition = condition

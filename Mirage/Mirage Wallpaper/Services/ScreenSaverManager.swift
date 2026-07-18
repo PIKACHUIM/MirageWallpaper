@@ -169,6 +169,8 @@ final class ScreenSaverManager {
                 rawPropertyValues[key] = property.value.doubleValue
             case .scenetexture, .file:
                 rawPropertyValues[key] = ["type": "scenetexture", "value": property.value.stringValue]
+            case .combo:
+                rawPropertyValues[key] = property.value.jsonObjectValue
             default:
                 rawPropertyValues[key] = property.value.stringValue
             }
