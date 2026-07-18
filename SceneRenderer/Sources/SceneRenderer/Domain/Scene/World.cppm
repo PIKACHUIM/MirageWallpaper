@@ -2382,6 +2382,14 @@ public:
     std::unordered_map<std::string, std::vector<std::string>>     linkedCameras;
     std::vector<std::shared_ptr<SceneCameraPath>>                 camera_paths;
 
+    // Reused scratch for TickCameraPaths so the per-frame camera-path pass does
+    // not allocate three fresh string containers on every frame it runs. Owned
+    // here (not local) purely to recycle capacity; cleared at the top of each
+    // TickCameraPaths call.
+    std::unordered_map<std::string, bool> m_camera_path_has_enabled;
+    std::unordered_set<std::string>       m_camera_path_touched;
+    std::unordered_set<std::string>       m_camera_path_reset;
+
     // WE layer IDs the render-graph build may elide when nothing links to
     // them, or route to `_rt_link_<id>` when something does. Two flavours
     // land here:

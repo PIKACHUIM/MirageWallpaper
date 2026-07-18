@@ -1137,13 +1137,19 @@ std::vector<SceneMaterialDirtyEvent> Scene::ConsumePreparedMaterialDirtyEvents()
 void Scene::TickCameraPaths() {
     if (camera_paths.empty()) return;
 
-    std::unordered_map<std::string, bool> has_enabled;
+    // Recycle the scratch containers' capacity across frames; clear() keeps the
+    // allocated buckets so a steady-state scene does no per-frame heap churn.
+    auto& has_enabled = m_camera_path_has_enabled;
+    auto& touched     = m_camera_path_touched;
+    auto& reset       = m_camera_path_reset;
+    has_enabled.clear();
+    touched.clear();
+    reset.clear();
+
     for (const auto& path : camera_paths) {
         if (path && path->enabled) has_enabled[path->camera_name] = true;
     }
 
-    std::unordered_set<std::string> touched;
-    std::unordered_set<std::string> reset;
     for (const auto& path : camera_paths) {
         if (! path || ! path->enabled) continue;
         if (path->Tick(elapsingTime)) touched.insert(path->camera_name);
