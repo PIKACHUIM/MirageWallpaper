@@ -144,6 +144,15 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 
     var propertyType: WEPropertyType { WEPropertyType(raw: type) }
 
+    // Runtime data written by older Mirage versions stored every combo as a
+    // string. Map such values back to the exact typed option from project.json.
+    // Exact matches win so legitimate string-valued combos remain strings.
+    func normalizedComboValue(_ candidate: WEPropertyValue) -> WEPropertyValue {
+        guard propertyType == .combo, let options, !options.isEmpty else { return candidate }
+        if options.contains(where: { $0.value == candidate }) { return candidate }
+        return options.first(where: { $0.value.stringValue == candidate.stringValue })?.value ?? candidate
+    }
+
     func displayText(fallbackKey key: String) -> String {
         if let t = text, !t.isEmpty {
             return WELocalization.resolve(t)

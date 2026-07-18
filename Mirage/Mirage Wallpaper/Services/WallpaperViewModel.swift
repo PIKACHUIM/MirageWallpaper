@@ -130,15 +130,21 @@ class WallpaperViewModel: ObservableObject {
 
     func loadRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
         if let data = UserDefaults.standard.data(forKey: runtimeKey(for: w)),
-           let s = try? JSONDecoder().decode(WallpaperRuntimeState.self, from: data) {
-            return s
+           let saved = try? JSONDecoder().decode(WallpaperRuntimeState.self, from: data) {
+            let normalized = normalizedRuntime(saved, for: w)
+            if normalized != saved, let migrated = try? JSONEncoder().encode(normalized) {
+                UserDefaults.standard.set(migrated, forKey: runtimeKey(for: w))
+            }
+            return normalized
         }
         return WallpaperRuntimeState()
     }
 
     func saveRuntime() {
-        guard currentWallpaper.isValid,
-              let data = try? JSONEncoder().encode(runtime) else { return }
+        guard currentWallpaper.isValid else { return }
+        let normalized = normalizedRuntime(runtime, for: currentWallpaper)
+        if normalized != runtime { runtime = normalized }
+        guard let data = try? JSONEncoder().encode(runtime) else { return }
         UserDefaults.standard.set(data, forKey: runtimeKey(for: currentWallpaper))
         if ScreenSaverManager.shared.configuredWallpaperID() == currentWallpaper.id {
             try? ScreenSaverManager.shared.configure(
@@ -161,7 +167,7 @@ class WallpaperViewModel: ObservableObject {
         var result = w.project.general?.properties?.items ?? [:]
         for (key, override) in runtimeState.propertyOverrides {
             if var prop = result[key] {
-                prop.value = override
+                prop.value = prop.normalizedComboValue(override)
                 result[key] = prop
             }
         }
@@ -194,6 +200,17 @@ class WallpaperViewModel: ObservableObject {
                     result[key] = property
                 }
             }
+        }
+        return result
+    }
+
+    private func normalizedRuntime(_ source: WallpaperRuntimeState,
+                                   for wallpaper: WEWallpaper) -> WallpaperRuntimeState {
+        var result = source
+        let properties = wallpaper.project.general?.properties?.items ?? [:]
+        for (key, value) in result.propertyOverrides {
+            guard let property = properties[key] else { continue }
+            result.propertyOverrides[key] = property.normalizedComboValue(value)
         }
         return result
     }
@@ -305,8 +322,9 @@ class WallpaperViewModel: ObservableObject {
 
     func setProperty(key: String, value: WEPropertyValue) {
         guard var prop = currentWallpaper.project.general?.properties?.items[key] else { return }
-        prop.value = value
-        runtime.propertyOverrides[key] = value
+        let normalizedValue = prop.normalizedComboValue(value)
+        prop.value = normalizedValue
+        runtime.propertyOverrides[key] = normalizedValue
         saveRuntime()
 
         switch currentWallpaper.kind {
