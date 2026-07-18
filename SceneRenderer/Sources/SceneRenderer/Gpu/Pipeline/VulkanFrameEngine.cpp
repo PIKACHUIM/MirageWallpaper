@@ -460,6 +460,13 @@ struct RenderProgram {
         return 0;
     }
 
+    void prepareFrameData(RenderingResources& rr) {
+        for (auto& record : pass_records) {
+            if (record.pass != nullptr && record.pass->prepared())
+                record.pass->prepareFrameData(rr);
+        }
+    }
+
     void rebuildScopes() {
         scopes.clear();
         std::vector<PreparedPassRecord*> pending_scope_passes;
@@ -1065,6 +1072,9 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     const auto& image = m_device->swapchain().images()[image_index];
 
     m_finpass->setPresent(image);
+    // Dynamic vertices, instance counts and uniforms must reach the staging
+    // buffer before recordUpload emits the GPU copy commands for this frame.
+    m_program.prepareFrameData(rr);
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1157,6 +1167,7 @@ void VulkanRender::Impl::drawFrameOffscreen() {
     }
 
     m_finpass->setPresent(image);
+    m_program.prepareFrameData(rr);
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
