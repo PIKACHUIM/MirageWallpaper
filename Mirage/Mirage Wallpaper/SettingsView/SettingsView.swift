@@ -74,24 +74,23 @@ struct SettingsView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Text(L("设置"))
-                .font(.headline)
-                .padding(.trailing, 8)
-
-            Picker("", selection: $viewModel.selection) {
-                ForEach(sections) { section in
-                    Label(section.title, systemImage: section.systemImage)
-                        .tag(section.id)
+        HStack(spacing: 4) {
+            Spacer(minLength: 0)
+            ForEach(sections) { section in
+                SettingsTab(
+                    title: section.title,
+                    systemImage: section.systemImage,
+                    isSelected: viewModel.selection == section.id
+                ) {
+                    viewModel.selection = section.id
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.bar)
     }
 
     private var footer: some View {
@@ -119,6 +118,47 @@ struct SettingsView: View {
             .keyboardShortcut(.defaultAction)
         }
         .padding(20)
+    }
+}
+
+/// A single preference-style tab: a large icon with its label underneath,
+/// highlighted when selected — mirrors the native macOS toolbar look.
+private struct SettingsTab: View {
+    let title: String
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 20, weight: .regular))
+                    .frame(height: 24)
+                Text(title)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+            .frame(width: 74)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(background)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+
+    private var background: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.15)
+        }
+        return isHovering ? Color.primary.opacity(0.08) : Color.clear
     }
 }
 
