@@ -9,7 +9,7 @@ import SwiftUI
 struct GeneralPage: SettingsPage {
     @ObservedObject var viewModel: GlobalSettingsViewModel
 
-    @State private var pathRefresh = 0
+    @State private var librarySources: [WallpaperLibrarySource]
     @State private var showMirrorWarning = false
 
     private var apiKeyIsEmpty: Bool {
@@ -18,12 +18,17 @@ struct GeneralPage: SettingsPage {
 
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
+        _librarySources = State(initialValue: WallpaperLibrary.shared.librarySources)
     }
 
     private func applyEndpointChange() {
         AppDelegate.shared.workshopViewModel.items = []
         AppDelegate.shared.workshopViewModel.currentPage = 1
         AppDelegate.shared.workshopViewModel.search()
+    }
+
+    private func refreshLibrarySources() {
+        librarySources = WallpaperLibrary.shared.librarySources
     }
 
     private func chooseDirectory(message: String, completion: @escaping (URL) -> Void) {
@@ -71,7 +76,7 @@ struct GeneralPage: SettingsPage {
                     Button("选择目录…") {
                         chooseDirectory(message: "选择 Wallpaper Engine 创意工坊壁纸所在目录（431960）") { url in
                             WallpaperLibrary.shared.setWorkshopDirectory(url)
-                            pathRefresh += 1
+                            refreshLibrarySources()
                             AppDelegate.shared.contentViewModel.refresh()
                         }
                     }
@@ -79,7 +84,7 @@ struct GeneralPage: SettingsPage {
                     Button("选择目录…") {
                         chooseDirectory(message: "选择用于存放导入壁纸的目录") { url in
                             WallpaperLibrary.shared.setImportedDirectory(url)
-                            pathRefresh += 1
+                            refreshLibrarySources()
                             AppDelegate.shared.contentViewModel.refresh()
                         }
                     }
@@ -89,18 +94,18 @@ struct GeneralPage: SettingsPage {
                         try? FileManager.default.createDirectory(at: source.url, withIntermediateDirectories: true)
                     }
                     NSWorkspace.shared.activateFileViewerSelecting([source.url])
-                    pathRefresh += 1
+                    refreshLibrarySources()
                 }
                 if source.role == .customSteam && WallpaperLibrary.shared.isWorkshopDirectoryCustomized {
                     Button("恢复默认") {
                         WallpaperLibrary.shared.setWorkshopDirectory(nil)
-                        pathRefresh += 1
+                        refreshLibrarySources()
                         AppDelegate.shared.contentViewModel.refresh()
                     }
                 } else if source.role == .imported && WallpaperLibrary.shared.isImportedDirectoryCustomized {
                     Button("恢复默认") {
                         WallpaperLibrary.shared.setImportedDirectory(nil)
-                        pathRefresh += 1
+                        refreshLibrarySources()
                         AppDelegate.shared.contentViewModel.refresh()
                     }
                 }
@@ -145,7 +150,7 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
-                ForEach(WallpaperLibrary.shared.librarySources) { source in
+                ForEach(librarySources) { source in
                     librarySourceRow(source)
                 }
 
@@ -153,7 +158,6 @@ struct GeneralPage: SettingsPage {
             } header: {
                 Label("壁纸库", systemImage: "folder.fill")
             }
-            .id(pathRefresh)
 
             if MirageRegion.isMainlandChina {
                 Section {

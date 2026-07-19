@@ -1,9 +1,19 @@
 import SwiftUI
 
 struct ScreenSaverPage: SettingsPage {
+    private struct Status {
+        let isInstalled: Bool
+        let configuredTitle: String
+
+        init(manager: ScreenSaverManager) {
+            isInstalled = manager.isInstalled
+            configuredTitle = manager.configuredWallpaperTitle() ?? "尚未选择"
+        }
+    }
+
     @ObservedObject var viewModel: GlobalSettingsViewModel
     @ObservedObject private var wallpaperViewModel: WallpaperViewModel
-    @State private var refreshToken = 0
+    @State private var status: Status
     @State private var message = ""
     @State private var showingError = false
     @State private var isWorking = false
@@ -11,26 +21,27 @@ struct ScreenSaverPage: SettingsPage {
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
         wallpaperViewModel = AppDelegate.shared.wallpaperViewModel
+        _status = State(initialValue: Status(manager: .shared))
     }
 
     private var manager: ScreenSaverManager { .shared }
     private var wallpaper: WEWallpaper { wallpaperViewModel.currentWallpaper }
-    private var configuredTitle: String {
-        manager.configuredWallpaperTitle() ?? "尚未选择"
+    private func refreshStatus() {
+        status = Status(manager: manager)
     }
 
     var body: some View {
         Form {
             Section {
                 HStack {
-                    Label(manager.isInstalled ? "Mirage 动态屏保已安装" : "Mirage 动态屏保尚未安装",
-                          systemImage: manager.isInstalled ? "checkmark.seal.fill" : "rectangle.dashed")
-                        .foregroundStyle(manager.isInstalled ? .green : .secondary)
+                    Label(status.isInstalled ? "Mirage 动态屏保已安装" : "Mirage 动态屏保尚未安装",
+                          systemImage: status.isInstalled ? "checkmark.seal.fill" : "rectangle.dashed")
+                        .foregroundStyle(status.isInstalled ? .green : .secondary)
                     Spacer()
-                    Button(manager.isInstalled ? "重新安装" : "安装") {
+                    Button(status.isInstalled ? "重新安装" : "安装") {
                         performAsync { try manager.install() }
                     }
-                    if manager.isInstalled {
+                    if status.isInstalled {
                         Button("卸载", role: .destructive) { performAsync { try manager.uninstall() } }
                     }
                 }
@@ -42,7 +53,7 @@ struct ScreenSaverPage: SettingsPage {
                     }
                 }
                 Button("打开系统屏保设置") { manager.openSystemSettings() }
-                    .disabled(!manager.isInstalled)
+                    .disabled(!status.isInstalled)
             } header: {
                 Label("屏保组件", systemImage: "sparkles.tv")
             } footer: {
@@ -51,7 +62,7 @@ struct ScreenSaverPage: SettingsPage {
             }
 
             Section {
-                LabeledContent("当前屏保壁纸", value: configuredTitle)
+                LabeledContent("当前屏保壁纸", value: status.configuredTitle)
                 LabeledContent("正在播放", value: wallpaper.isValid ? wallpaper.project.title : "无")
                 Button("将正在播放的壁纸设为屏保") {
                     perform { try configureCurrentWallpaper() }
@@ -72,7 +83,6 @@ struct ScreenSaverPage: SettingsPage {
             }
         }
         .formStyle(.grouped)
-        .id(refreshToken)
         .alert("屏保操作失败", isPresented: $showingError) {
             Button("好", role: .cancel) {}
         } message: {
@@ -92,7 +102,7 @@ struct ScreenSaverPage: SettingsPage {
     private func perform(_ operation: () throws -> Void) {
         do {
             try operation()
-            refreshToken += 1
+            refreshStatus()
         } catch {
             show(error)
         }
@@ -105,7 +115,7 @@ struct ScreenSaverPage: SettingsPage {
             DispatchQueue.main.async {
                 isWorking = false
                 switch result {
-                case .success: refreshToken += 1
+                case .success: refreshStatus()
                 case .failure(let error): show(error)
                 }
             }
