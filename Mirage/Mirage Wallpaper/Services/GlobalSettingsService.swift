@@ -90,6 +90,20 @@ struct GlobalSettings: Codable, Equatable {
     // MARK: Automatic Setup
     var autoStart = false
     var safeMode = false
+    // Optional solely for backwards-compatible decoding of settings written
+    // before the software-update section existed.
+    var automaticUpdatesEnabled: Bool? = true
+    // Optional solely for backwards-compatible decoding of settings written
+    // before the software-update section existed.
+    var receivePrereleaseUpdates: Bool? = false
+
+    var shouldAutomaticallyUpdate: Bool {
+        automaticUpdatesEnabled ?? true
+    }
+
+    var shouldReceivePrereleaseUpdates: Bool {
+        receivePrereleaseUpdates ?? false
+    }
     
     // MARK: Basic Setup
     var language = GSLocalization.followSystem

@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A100000B0000000000000000 /* MirageScreenSaver.saver in Copy Screen Savers */ = {isa = PBXBuildFile; fileRef = A10000010000000000000000 /* MirageScreenSaver.saver */; };
 		A10000100000000000000000 /* thumbnail.png in Resources */ = {isa = PBXBuildFile; fileRef = A10000120000000000000000 /* thumbnail.png */; };
+		C0D3A0010000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C0D3A0020000000000000002 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +74,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0D3A0010000000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,6 +137,9 @@
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
 			);
 			name = "Mirage Wallpaper";
+			packageProductDependencies = (
+				C0D3A0020000000000000002 /* Sparkle */,
+			);
 			productName = Mirage;
 			productReference = 5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */;
 			productType = "com.apple.product-type.application";
@@ -185,6 +190,9 @@
 			);
 			mainGroup = 5EC47E6D2A2DB2E600120CCC;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				C0D3A0030000000000000003 /* XCRemoteSwiftPackageReference \"Sparkle\" */,
+			);
 			productRefGroup = 5EC47E772A2DB2E600120CCC /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -194,6 +202,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C0D3A0030000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C0D3A0020000000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0D3A0030000000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		5EC47E742A2DB2E600120CCC /* Resources */ = {
@@ -372,6 +399,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -423,6 +451,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -469,7 +498,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				EXCLUDED_SOURCE_FILE_NAMES = Info.plist;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -500,7 +529,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				EXCLUDED_SOURCE_FILE_NAMES = Info.plist;
 				GENERATE_INFOPLIST_FILE = NO;

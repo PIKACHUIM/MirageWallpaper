@@ -122,6 +122,30 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
+                Toggle("自动检查并下载更新", isOn: Binding(
+                    get: { viewModel.settings.shouldAutomaticallyUpdate },
+                    set: { viewModel.settings.automaticUpdatesEnabled = $0 }
+                ))
+                    .onChange(of: viewModel.settings.shouldAutomaticallyUpdate) { _, _ in
+                        UpdateManager.shared.applyAutomaticUpdatePreference()
+                    }
+                Toggle("接收测试版更新", isOn: Binding(
+                    get: { viewModel.settings.shouldReceivePrereleaseUpdates },
+                    set: { viewModel.settings.receivePrereleaseUpdates = $0 }
+                ))
+                .onChange(of: viewModel.settings.shouldReceivePrereleaseUpdates) { _, _ in
+                    if viewModel.settings.shouldAutomaticallyUpdate {
+                        UpdateManager.shared.checkForUpdates(nil)
+                    }
+                }
+                Text("关闭自动更新后，Mirage 不会在后台检查或下载；仍可通过菜单中的“检查更新…”手动检查。开启测试版后，Mirage 会在正式更新之外检查最新的测试版。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Label("软件更新", systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            Section {
                 Picker("外观", selection: $viewModel.settings.appearance) {
                     Text("浅色").tag(GSAppearance.light)
                     Text("深色").tag(GSAppearance.dark)

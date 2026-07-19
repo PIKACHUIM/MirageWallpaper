@@ -88,6 +88,26 @@ final class ScreenSaverManager {
         try terminateScreenSaverServices(restartWallpaperAgent: true)
     }
 
+    /// The screen saver is copied out of the app bundle, so replacing Mirage.app
+    /// alone cannot update an already installed saver. Keep an existing user
+    /// installation aligned with the newly updated app on the next launch.
+    func refreshInstalledVersionIfNeeded() {
+        guard isInstalled,
+              let bundledURL = bundledSaverURL,
+              let installedBundle = Bundle(url: installedURL),
+              let bundledBundle = Bundle(url: bundledURL),
+              let installedBuild = installedBundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              let bundledBuild = bundledBundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              installedBuild != bundledBuild else { return }
+
+        do {
+            try install()
+            NSLog("[Mirage] 已将已安装屏保组件更新至构建 %@", bundledBuild)
+        } catch {
+            NSLog("[Mirage] 更新已安装屏保组件失败: %@", error.localizedDescription)
+        }
+    }
+
     private func validatedFingerprint(of saverURL: URL) throws -> String {
         guard let bundle = Bundle(url: saverURL),
               bundle.bundleIdentifier == "cn.laobamac.Mirage.ScreenSaver",

@@ -61,6 +61,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.mainWindowController.window.center()
             self.mainWindowController.window.makeKeyAndOrderFront(nil)
         }
+
+        UpdateManager.shared.start()
+
+        DispatchQueue.global(qos: .utility).async {
+            ScreenSaverManager.shared.refreshInstalledVersionIfNeeded()
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

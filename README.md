@@ -178,8 +178,8 @@ MIRAGE_STEAM_WEB_API_KEY='YOUR_32_CHARACTER_STEAM_WEB_API_KEY' \
 首次运行前，在仓库的 **Settings → Secrets and variables → Actions** 中添加 Repository Secret：
 
 ```text
-Name:  MIRAGE_STEAM_WEB_API_KEY
-Value: 32 位 Steam Web API Key
+MIRAGE_STEAM_WEB_API_KEY      32 位 Steam Web API Key
+MIRAGE_SPARKLE_PRIVATE_KEY    Mirage 专用 Sparkle Ed25519 私钥
 ```
 
 如果本机安装了 GitHub CLI，也可以执行：
@@ -188,13 +188,20 @@ Value: 32 位 Steam Web API Key
 gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 ```
 
-Workflow 会校验 Secret、构建并临时签名 App、验证三个渲染器、生成 `Mirage-<版本>-macOS-x86_64.zip` 和 `Mirage-<版本>-macOS-arm64.zip` 以及对应的 SHA-256 文件，再将它们保留为 30 天的 Actions Artifact。
+`MIRAGE_SPARKLE_PRIVATE_KEY` 只用于 Actions 生成 Ed25519 签名的更新包和 appcast。它绝不能提交到仓库；应保留登录钥匙串中的原始密钥，并另存一份离线备份。客户端仅包含可公开的公钥。
 
-每次推送到 `main` 且构建成功后，Workflow 还会用当前产物更新仓库唯一的 Pre-release。更新说明从最近一个正式 Release 开始收集到当前版本之间的全部 commit，每个 commit 单独一行；尚无正式 Release 时则列出完整提交历史。旧 Pre-release 及其标签会在发布前删除，正式 Release 不受影响。
+Workflow 为每次构建自动将完整 Git commit 与 `git rev-list --count` 生成的递增构建号写入 App，因此不需要手动更新版本号。只有构建号更高的 commit 才会被安装，避免把较新的开发构建降级为较旧 Release。
+
+- 推送 `v*` 标签会创建正式 GitHub Release，并写入稳定更新源；
+- 推送 `main` 会替换滚动的 `prerelease` GitHub Release，并写入 beta 更新源；
+- App 默认自动检查并下载正式版；在“设置 → 软件更新”关闭自动更新后不再后台检查或下载，但仍可手动检查；开启“接收测试版更新”后，Sparkle 会同时检查 beta channel；
+- 两个架构各自使用独立 appcast，更新包、appcast 和更新说明均经 Sparkle Ed25519 签名。
+
+App 更新后的下一次启动会同时检查已经安装到 `~/Library/Screen Savers` 的 Mirage 屏保组件；仅当其构建号落后于 App 内置组件时才会原子替换并重启相关系统屏保服务。
 
 GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无法让客户端内置 Key 成为真正的秘密：发布后的 App 必须包含它，有能力分析 App 的人仍可以提取。若未来需要不可提取的凭据，应把对应请求放到受控服务端，由服务端持有 Key；不要依赖客户端混淆。
 
-当前 Workflow 使用临时签名，不包含 Apple Developer ID 签名和公证，因此产物适合测试与内部分发。正式公开发布建议再配置 Developer ID、Hardened Runtime 和 Apple Notary Service。
+当前 Workflow 使用临时签名，不包含 Apple Developer ID 签名和公证。首次安装的用户仍可能需要在 macOS Gatekeeper 中手动允许 Mirage；但后续更新的真实性由内置 Ed25519 公钥验证。
 
 ## 数据目录
 

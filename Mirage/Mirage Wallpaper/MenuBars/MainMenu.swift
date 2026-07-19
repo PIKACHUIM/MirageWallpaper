@@ -12,6 +12,7 @@ extension AppDelegate {
         appMenu.submenu = NSMenu(title: "Mirage")
         appMenu.submenu?.items = [
             .init(title: "关于 Mirage", action: #selector(self.showAboutUs), keyEquivalent: ""),
+            .init(title: "检查更新…", action: #selector(UpdateManager.checkForUpdates(_:)), keyEquivalent: ""),
             .separator(),
             .init(title: "设置…", action: #selector(openSettingsWindow), keyEquivalent: ","),
             .separator(),
@@ -90,6 +91,7 @@ extension AppDelegate {
 
         let mainMenu = NSMenu()
         mainMenu.items = [appMenu, fileMenu, editMenu, viewMenu, windowMenu, helpMenu]
+        appMenu.submenu?.items.first { $0.action == #selector(UpdateManager.checkForUpdates(_:)) }?.target = UpdateManager.shared
         NSApplication.shared.mainMenu = mainMenu
     }
 

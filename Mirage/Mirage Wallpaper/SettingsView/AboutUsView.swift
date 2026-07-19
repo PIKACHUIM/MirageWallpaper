@@ -23,6 +23,14 @@ struct AboutUsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
 
+    private var build: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "开发构建"
+    }
+
+    private var commit: String {
+        String((Bundle.main.infoDictionary?["MirageGitCommit"] as? String ?? "unknown").prefix(12))
+    }
+
     var body: some View {
         VStack(spacing: 24) {
             HStack(spacing: 20) {
@@ -39,7 +47,8 @@ struct AboutUsView: View {
                 }
             }
             VStack(spacing: 14) {
-                Text("版本 \(version)").foregroundStyle(.secondary)
+                Text("版本 \(version)（构建 \(build)）").foregroundStyle(.secondary)
+                Text("提交 \(commit)").font(.caption.monospaced()).foregroundStyle(.tertiary)
                 HStack(spacing: 4) {
                     Text("作者")
                     Text("王孝慈 (laobamac)").bold()

@@ -53,6 +53,9 @@ extension AppDelegate {
             .init(title: "设置", systemImage: "gearshape.fill",
                   action: #selector(openSettingsWindow), keyEquivalent: ","),
 
+            .init(title: "检查更新…", systemImage: "arrow.triangle.2.circlepath",
+                  action: #selector(UpdateManager.checkForUpdates(_:)), keyEquivalent: ""),
+
             .separator(),
 
             .init(title: "项目主页", systemImage: "globe",
@@ -81,7 +84,9 @@ extension AppDelegate {
         // target AppDelegate so right-click menu actions (especially pause) are
         // delivered to the renderer controller instead of being discarded.
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) {
-            item.target = self
+            item.target = item.action == #selector(UpdateManager.checkForUpdates(_:))
+                ? UpdateManager.shared
+                : self
         }
 
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
