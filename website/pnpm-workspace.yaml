@@ -1,11 +1,9 @@
+# pnpm 11 removed onlyBuiltDependencies and defaults strictDepBuilds to true,
+# so unapproved install scripts fail with ERR_PNPM_IGNORED_BUILDS. Astro's build
+# needs sharp (image optimization) and esbuild native binaries, so allow them.
 allowBuilds:
-  esbuild: set this to true or false
-  sharp: set this to true or false
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
+  esbuild: true
+  sharp: true
 
-# The build scripts above are opt-in; Astro's build only needs the prebuilt
-# platform binaries (@img/sharp-*, @esbuild/*), so don't block `pnpm build`
-# on the pre-run dependency-state check.
+# Don't block `pnpm build` on the pre-run dependency-state check.
 verifyDepsBeforeRun: false
