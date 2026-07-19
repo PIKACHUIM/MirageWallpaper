@@ -102,25 +102,45 @@ const t = {
       <span class="a2"></span>
       <span class="a3"></span>
     </div>
-    <div class="wrap">
-      <span class="hero-badge"><span class="dot"></span>{t.badge}</span>
-      <h1>{t.title1} <span class="mirage-gradient-text">{t.titleGrad}</span></h1>
-      <p class="lede">{t.lede}</p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} →</a>
-        <a class="btn btn-ghost" href={releases}>{t.ctaGhost}</a>
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <span class="hero-badge"><span class="dot"></span>{t.badge}</span>
+        <h1>{t.title1} <span class="mirage-gradient-text">{t.titleGrad}</span></h1>
+        <p class="lede">{t.lede}</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" href={releases}>{t.ctaGhost}</a>
+        </div>
+        <p class="hero-meta">{t.meta}</p>
       </div>
-      <p class="hero-meta">{t.meta}</p>
 
-      <div class="hero-window mirage-reveal">
-        <div class="titlebar"><i></i><i></i><i></i></div>
-        <div class="canvas"><span>{t.canvas}</span></div>
+      <!-- Faux macOS app window mimicking Mirage's library UI. -->
+      <div class="hero-window mirage-reveal" aria-hidden="true">
+        <div class="titlebar">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="titlebar-label">{t.canvas}</span>
+        </div>
+        <div class="window-body">
+          <aside class="mock-sidebar">
+            <span class="mock-search"></span>
+            <span class="mock-nav is-active"></span>
+            <span class="mock-nav"></span>
+            <span class="mock-nav"></span>
+            <span class="mock-nav short"></span>
+            <span class="mock-nav"></span>
+          </aside>
+          <div class="mock-grid">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <span class={`mock-tile t${i + 1}`}></span>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- FEATURES -->
-  <section>
+  <section class="features">
     <div class="wrap">
       <div class="section-head mirage-reveal">
         <h2>{t.featTitle}</h2>
@@ -139,7 +159,7 @@ const t = {
   </section>
 
   <!-- ARCHITECTURE -->
-  <section>
+  <section class="arch">
     <div class="wrap">
       <div class="section-head mirage-reveal">
         <h2>{t.archTitle}</h2>
@@ -147,7 +167,7 @@ const t = {
       </div>
       <div class="arch-grid">
         {t.arch.map((a, i) => (
-          <article class="arch-node mirage-reveal" data-delay={i * 70}>
+          <article class={`arch-node mirage-reveal${i === 0 ? ' is-lead' : ''}`} data-delay={i * 70}>
             <span class="tag">{a.tag}</span>
             <h4>{a.name}</h4>
             <code>{a.tech}</code>
@@ -168,12 +188,14 @@ const t = {
 
   <!-- FINAL CTA -->
   <section class="final-cta">
-    <div class="wrap mirage-reveal">
-      <h2 class="mirage-gradient-text">{t.finalTitle}</h2>
-      <p>{t.finalSub}</p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} →</a>
-        <a class="btn btn-ghost" href={github}>GitHub</a>
+    <div class="wrap">
+      <div class="panel mirage-reveal">
+        <h2 class="mirage-gradient-text">{t.finalTitle}</h2>
+        <p>{t.finalSub}</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} <span aria-hidden="true">→</span></a>
+          <a class="btn btn-ghost" href={github}>GitHub</a>
+        </div>
       </div>
     </div>
     <footer class="landing-footer">
