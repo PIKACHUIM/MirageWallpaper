@@ -229,7 +229,10 @@ final class ScreenSaverManager {
     }
 
     func openSystemSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension") {
+        // On macOS 14, Screen Saver is a section of Wallpaper settings.  The
+        // standalone ScreenSaver-Settings extension can fall back to General
+        // instead of navigating to the intended System Settings page.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") {
             NSWorkspace.shared.open(url)
         }
     }
