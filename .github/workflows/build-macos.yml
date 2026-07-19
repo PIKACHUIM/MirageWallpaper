@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    # Docs-only changes shouldn't rebuild the app. paths-ignore skips a push
+    # only when *every* changed file matches, so any app source change still
+    # triggers a build. Tag pushes (v*) ignore paths filters and always build.
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - ".github/workflows/deploy-website.yml"
+      - "**/*.md"
     tags:
       - "v*"
   workflow_dispatch:
