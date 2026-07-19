@@ -1,7 +1,6 @@
 ---
 // Animated splash landing page for Mirage. Localized via `lang` prop.
 // All copy is grounded in the app's actual, documented capabilities.
-import '../scripts/reveal.ts';
 
 interface Props {
   lang?: 'zh' | 'en';
@@ -182,3 +181,9 @@ const t = {
     </footer>
   </section>
 </div>
+
+<!-- Client-only: reveal-on-scroll. Bundled by Astro and run in the browser,
+     so it never touches `document` during server-side prerender. -->
+<script>
+  import '../scripts/reveal.ts';
+</script>
