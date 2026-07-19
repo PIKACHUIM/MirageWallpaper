@@ -1,4 +1,7 @@
-/* Generated from Mirage user-visible source literals. */
+/*
+ Mirage Wallpaper
+ Copyright © 2026 王孝慈. All rights reserved.
+*/
 
 " : wallpaper.project.title)-预设.json" = ": wallpaper.project.title)-default.json";
 "$1[已隐藏]" = "$1[hidden]";
@@ -621,3 +624,15 @@
 "SteamCMD 未确认下载成功 (exit %@)" = "SteamCMD did not confirm a successful download (exit %@)";
 "SteamCMD 下载失败：%@" = "SteamCMD download failed: %@";
 "SteamCMD 安装失败：%@" = "SteamCMD installation failed: %@";
+"支持 Mirage" = "Support Mirage";
+"Mirage 会继续免费开放开发。若它为你的桌面带来了价值，欢迎按自己的意愿赞助；每一份支持都会用于持续维护与兼容性改进。" = "Mirage will remain free and open for development. If it brings value to your desktop, voluntary support is warmly appreciated; every contribution helps fund ongoing maintenance and compatibility improvements.";
+"爱发电" = "Afdian";
+"点击打开爱发电" = "Click to open Afdian";
+"微信支付" = "WeChat Pay";
+"使用微信扫一扫" = "Scan with WeChat";
+"支付宝" = "Alipay";
+"使用支付宝扫一扫" = "Scan with Alipay";
+"海外赞助" = "International support";
+"接收 USDT" = "USDT recipient";
+"地址已复制" = "Address copied";
+"复制地址" = "Copy address";

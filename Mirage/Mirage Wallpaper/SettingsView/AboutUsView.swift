@@ -12,13 +12,19 @@ extension AppDelegate {
         window.styleMask = [.closable, .titled]
         window.isReleasedWhenClosed = false
         window.title = ""
-        window.contentView = NSHostingView(rootView: AboutUsView())
+        window.contentView = NSHostingView(rootView: AboutUsView()
+            .environment(\.locale, MirageLocalization.shared.locale))
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
 }
 
 struct AboutUsView: View {
+    @ObservedObject private var localization = MirageLocalization.shared
+    @State private var copiedUSDTAddress = false
+
+    private let afdianURL = URL(string: "https://www.ifdian.net/a/laobamac")!
+    private let usdtAddress = "0xFc0a5C52e3A085FEc7b077FE3D2C413114Bf880D"
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
@@ -32,7 +38,8 @@ struct AboutUsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        ScrollView {
+            VStack(spacing: 24) {
             HStack(spacing: 20) {
                 if let icon = NSImage(named: "AppIcon") {
                     Image(nsImage: icon)
@@ -58,11 +65,97 @@ struct AboutUsView: View {
                     .font(.footnote)
             }
             .font(.callout)
-            ProjectFeedbackBanner(showsActions: false)
-                .padding(.horizontal, 20)
+                sponsorSection
+
+                ProjectFeedbackBanner(showsActions: false)
+                    .padding(.horizontal, 20)
+            }
+            .padding(.vertical, 24)
         }
         .textSelection(.enabled)
-        .frame(width: 460, height: 390)
+        .environment(\.locale, localization.locale)
+        .frame(width: 760, height: 700)
+    }
+
+    private var sponsorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(.pink)
+                Text("支持 Mirage")
+                    .font(.title3.bold())
+            }
+
+            Text("Mirage 会继续免费开放开发。若它为你的桌面带来了价值，欢迎按自己的意愿赞助；每一份支持都会用于持续维护与兼容性改进。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .top, spacing: 16) {
+                Link(destination: afdianURL) {
+                    SponsorQRCode(resource: "afdian", fileExtension: "jpg", title: "爱发电", subtitle: "点击打开爱发电")
+                }
+                .buttonStyle(.plain)
+
+                SponsorQRCode(resource: "wechat-pay", fileExtension: "png", title: "微信支付", subtitle: "使用微信扫一扫")
+                SponsorQRCode(resource: "alipay", fileExtension: "jpg", title: "支付宝", subtitle: "使用支付宝扫一扫")
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("USDT", systemImage: "bitcoinsign.circle")
+                        .font(.headline)
+                    Text("海外赞助")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("接收 USDT")
+                        .font(.caption)
+                    Text(usdtAddress)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(usdtAddress, forType: .string)
+                        copiedUSDTAddress = true
+                    } label: {
+                        Label(copiedUSDTAddress ? "地址已复制" : "复制地址", systemImage: copiedUSDTAddress ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(width: 160, alignment: .leading)
+            }
+        }
+        .padding(16)
+        .background(Color.pink.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.pink.opacity(0.25))
+        }
+        .padding(.horizontal, 28)
+    }
+}
+
+private struct SponsorQRCode: View {
+    let resource: String
+    let fileExtension: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let url = Bundle.main.url(forResource: resource, withExtension: fileExtension),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 118, height: 154)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            Text(title).font(.headline)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 118)
     }
 }
 

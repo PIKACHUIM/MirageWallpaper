@@ -1,3 +1,10 @@
+//
+//  MirageLocalization.swift
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 import Foundation
 
 /// Centralizes Mirage's application language.  SwiftUI receives `locale` through

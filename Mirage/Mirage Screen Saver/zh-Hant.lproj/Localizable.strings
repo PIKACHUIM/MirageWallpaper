@@ -1,4 +1,7 @@
-/* Mirage screen saver user-visible messages. */
+/*
+ Mirage Screen Saver
+ Copyright © 2026 王孝慈. All rights reserved.
+*/
 
 "不支持的壁纸格式" = "不支援的壁紙格式";
 "场景壁纸加载失败" = "場景壁紙載入失敗";
