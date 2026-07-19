@@ -91,13 +91,9 @@ struct AboutUsView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // A flexible grid keeps every donation option visible regardless of
-            // the container width instead of being clipped by a fixed-width HStack.
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150), spacing: 16, alignment: .top)],
-                alignment: .leading,
-                spacing: 16
-            ) {
+            // All four donation options sit on a single row; the USDT card
+            // stretches to fill the space beside the three QR codes.
+            HStack(alignment: .top, spacing: 16) {
                 Link(destination: afdianURL) {
                     SponsorQRCode(resource: "afdian", fileExtension: "jpg", title: "爱发电", subtitle: "点击打开爱发电")
                 }
@@ -107,6 +103,7 @@ struct AboutUsView: View {
                 SponsorQRCode(resource: "alipay", fileExtension: "jpg", title: "支付宝", subtitle: "使用支付宝扫一扫")
 
                 usdtCard
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(16)
