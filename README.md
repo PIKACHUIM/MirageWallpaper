@@ -5,6 +5,10 @@
 <h1 align="center">Mirage</h1>
 
 <p align="center">
+  <a href="README_EN.md">English</a> · 简体中文
+</p>
+
+<p align="center">
   面向 macOS 的原生动态壁纸管理器与 Wallpaper Engine 兼容运行时。
 </p>
 
