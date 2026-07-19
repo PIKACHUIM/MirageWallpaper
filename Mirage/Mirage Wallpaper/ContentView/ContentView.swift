@@ -12,6 +12,7 @@ protocol SubviewOfContentView: View {
 
 struct ContentView: View {
     @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
+    @ObservedObject private var localization = MirageLocalization.shared
 
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
@@ -174,6 +175,7 @@ struct ContentView: View {
             SteamSetupView(viewModel: SteamSetupViewModel())
                 .frame(width: 560, height: 640)
         }
+        .environment(\.locale, localization.locale)
     }
 }
 

@@ -193,27 +193,45 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 
 // MARK: - Localization
 
-// Resolves WE `ui_*` label keys via the bundled official ui_zh-chs.json.
-// Unmatched ui_ keys degrade to readable text; everything else is returned as-is.
+// Resolves WE `ui_*` labels with the official table matching Mirage's selected
+// language.  Wallpaper metadata itself is intentionally never translated.
 enum WELocalization {
-    private static let table: [String: String] = {
-        guard let url = Bundle.main.url(forResource: "ui_zh-chs", withExtension: "json"),
+    private static var tables: [String: [String: String]] = [:]
+    private static let lock = NSLock()
+
+    private static var resourceName: String {
+        switch MirageLocalization.shared.locale.identifier {
+        case let id where id.hasPrefix("zh-Hant"): return "ui_zh-cht"
+        case let id where id.hasPrefix("zh-Hans"): return "ui_zh-chs"
+        default: return "ui_en-us"
+        }
+    }
+
+    private static func table(named name: String) -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = tables[name] { return cached }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+        else {
+            tables[name] = [:]
+            return [:]
+        }
         var out: [String: String] = [:]
         out.reserveCapacity(obj.count)
         for (k, v) in obj {
             if let s = v as? String { out[k] = s }
         }
+        tables[name] = out
         return out
-    }()
+    }
 
     static func resolve(_ raw: String) -> String {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty { return raw }
         guard key.hasPrefix("ui_") else { return raw }
-        if let mapped = table[key] { return mapped }
+        if let mapped = table(named: resourceName)[key] { return mapped }
         return humanize(key)
     }
 
@@ -512,10 +530,10 @@ enum WallpaperKind: String {
 
     var displayName: String {
         switch self {
-        case .scene: return "场景"
-        case .web: return "网页"
-        case .video: return "视频"
-        case .unsupported: return "不支持"
+        case .scene: return L("场景")
+        case .web: return L("网页")
+        case .video: return L("视频")
+        case .unsupported: return L("不支持")
         }
     }
 }
@@ -550,9 +568,9 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     var presetStatusDescription: String? {
         switch presetStatus {
         case .notPreset, .resolved: return nil
-        case .missingDependency: return "缺少基础壁纸"
-        case .invalidDependency: return "基础壁纸无效"
-        case .circularDependency: return "预设循环依赖"
+        case .missingDependency: return L("缺少基础壁纸")
+        case .invalidDependency: return L("基础壁纸无效")
+        case .circularDependency: return L("预设循环依赖")
         }
     }
     var isValid: Bool {

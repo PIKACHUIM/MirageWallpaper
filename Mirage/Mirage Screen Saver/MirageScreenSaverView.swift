@@ -22,6 +22,7 @@ private struct MirageSaverConfiguration {
     let rawProperties: [String: Any]
     let fps: Int
     let fillMode: String
+    let language: String
 
     static func load() -> Self? {
         let home: URL
@@ -53,8 +54,27 @@ private struct MirageSaverConfiguration {
             properties: object["properties"] as? [String: Any] ?? [:],
             rawProperties: object["rawProperties"] as? [String: Any] ?? [:],
             fps: max(10, min(object["fps"] as? Int ?? 30, 60)),
-            fillMode: object["fillMode"] as? String ?? "cover"
+            fillMode: object["fillMode"] as? String ?? "cover",
+            language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en"
         )
+    }
+}
+
+private enum MirageSaverLocalization {
+    static func string(_ key: String, language: String? = nil) -> String {
+        let preferred = (language ?? Locale.preferredLanguages.first ?? "en").lowercased()
+        let resource: String
+        if preferred.hasPrefix("zh-hant") || preferred.hasPrefix("zh-tw") || preferred.hasPrefix("zh-hk") {
+            resource = "zh-Hant"
+        } else if preferred.hasPrefix("zh") {
+            resource = "zh-Hans"
+        } else {
+            resource = "en"
+        }
+        let bundle = Bundle(for: MirageScreenSaverView.self)
+        guard let path = bundle.path(forResource: resource, ofType: "lproj"),
+              let localizedBundle = Bundle(path: path) else { return key }
+        return localizedBundle.localizedString(forKey: key, value: key, table: "Localizable")
     }
 }
 
@@ -192,13 +212,17 @@ final class MirageScreenSaverView: ScreenSaverView {
         if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
     }
 
+    private func localized(_ key: String) -> String {
+        MirageSaverLocalization.string(key, language: configuration?.language)
+    }
+
     private func loadWallpaper() {
         guard !didLoadWallpaper, window != nil else { return }
         layoutSubtreeIfNeeded()
         normalizeFullScreenBoundsIfNeeded()
         didLoadWallpaper = true
         guard let configuration = MirageSaverConfiguration.load() else {
-            showMessage("请先在 Mirage 设置中选择屏保壁纸")
+            showMessage(MirageSaverLocalization.string("请先在 Mirage 设置中选择屏保壁纸"))
             return
         }
         self.configuration = configuration
@@ -207,7 +231,7 @@ final class MirageScreenSaverView: ScreenSaverView {
         case "video": loadVideo(configuration)
         case "web": loadWeb(configuration)
         case "scene": loadScene(configuration)
-        default: showMessage("不支持的壁纸格式")
+        default: showMessage(localized("不支持的壁纸格式"))
         }
     }
 
@@ -215,14 +239,14 @@ final class MirageScreenSaverView: ScreenSaverView {
         let bundle = Bundle(for: MirageScreenSaverView.self)
         guard let resources = bundle.resourceURL,
               let library = MirageSceneLibrary(bundle: bundle) else {
-            showMessage("场景屏保组件不可用")
+            showMessage(localized("场景屏保组件不可用"))
             return
         }
         let assets = resources.appendingPathComponent("assets", isDirectory: true)
         let icd = resources.appendingPathComponent("vulkan/icd.d/MoltenVK_icd.json")
         guard FileManager.default.fileExists(atPath: assets.path),
               FileManager.default.fileExists(atPath: icd.path) else {
-            showMessage("场景屏保资源不完整")
+            showMessage(localized("场景屏保资源不完整"))
             return
         }
         setenv("VK_ICD_FILENAMES", icd.path, 1)
@@ -259,7 +283,7 @@ final class MirageScreenSaverView: ScreenSaverView {
             }
         }
         guard let engine else {
-            showMessage("场景壁纸加载失败")
+            showMessage(localized("场景壁纸加载失败"))
             return
         }
         sceneLibrary = library

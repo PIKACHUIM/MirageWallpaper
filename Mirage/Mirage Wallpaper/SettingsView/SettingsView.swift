@@ -37,6 +37,7 @@ extension AppDelegate {
 
 struct SettingsView: View {
     @EnvironmentObject var viewModel: GlobalSettingsViewModel
+    @ObservedObject private var localization = MirageLocalization.shared
     
     var body: some View {
         VStack {
@@ -85,6 +86,7 @@ struct SettingsView: View {
             .padding(20)
         }
         .frame(minWidth: 500)
+        .environment(\.locale, localization.locale)
     }
 }
 
@@ -108,27 +110,27 @@ extension AppDelegate: NSToolbarDelegate {
         case SettingsToolbarIdentifiers.performance:
             toolbarItem.action = #selector(jumpToPerformance)
             toolbarItem.image = NSImage(systemSymbolName: "speedometer", accessibilityDescription: nil)
-            toolbarItem.label = "性能"
+            toolbarItem.label = L("性能")
 
         case SettingsToolbarIdentifiers.general:
             toolbarItem.action = #selector(jumpToGeneral)
             toolbarItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-            toolbarItem.label = "通用"
+            toolbarItem.label = L("通用")
             
         case SettingsToolbarIdentifiers.plugins:
             toolbarItem.action = #selector(jumpToPlugins)
             toolbarItem.image = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)
-            toolbarItem.label = "插件"
+            toolbarItem.label = L("插件")
 
         case SettingsToolbarIdentifiers.screenSaver:
             toolbarItem.action = #selector(jumpToScreenSaver)
             toolbarItem.image = NSImage(systemSymbolName: "sparkles.tv", accessibilityDescription: nil)
-            toolbarItem.label = "屏保"
+            toolbarItem.label = L("屏保")
             
         case SettingsToolbarIdentifiers.about:
             toolbarItem.action = #selector(jumpToAbout)
             toolbarItem.image = NSImage(systemSymbolName: "person.3", accessibilityDescription: nil)
-            toolbarItem.label = "关于"
+            toolbarItem.label = L("关于")
             
         default:
             fatalError()
@@ -137,6 +139,24 @@ extension AppDelegate: NSToolbarDelegate {
         toolbarItem.isBordered = false
         
         return toolbarItem
+    }
+}
+
+extension AppDelegate {
+    func refreshSettingsToolbarLocalization() {
+        guard let toolbar = settingsWindow?.toolbar else { return }
+        for item in toolbar.items {
+            switch item.itemIdentifier {
+            case SettingsToolbarIdentifiers.performance: item.label = L("性能")
+            case SettingsToolbarIdentifiers.general: item.label = L("通用")
+            case SettingsToolbarIdentifiers.plugins: item.label = L("插件")
+            case SettingsToolbarIdentifiers.screenSaver: item.label = L("屏保")
+            case SettingsToolbarIdentifiers.about: item.label = L("关于")
+            default: continue
+            }
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+        }
     }
 }
 

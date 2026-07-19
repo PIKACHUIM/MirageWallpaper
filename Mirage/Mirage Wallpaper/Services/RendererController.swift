@@ -12,9 +12,9 @@ enum FillMode: String, CaseIterable, Codable, Identifiable {
     var id: Self { self }
     var displayName: String {
         switch self {
-        case .cover: return "填充"
-        case .contain: return "适应"
-        case .stretch: return "拉伸"
+        case .cover: return L("填充")
+        case .contain: return L("适应")
+        case .stretch: return L("拉伸")
         }
     }
 }

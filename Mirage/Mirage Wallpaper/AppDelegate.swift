@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var workshopViewModel = WorkshopViewModel()
 
     var importOpenPanel: NSOpenPanel!
+    private var localizationObserver: NSObjectProtocol?
 
     static var shared = AppDelegate()
 
@@ -29,6 +30,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
+        localizationObserver = NotificationCenter.default.addObserver(
+            forName: MirageLocalization.didChangeNotification,
+            object: MirageLocalization.shared,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshLocalizedChrome()
+        }
 
         wallpaperViewModel.renderer.onProcessExit = { [weak self] screen, abnormal in
             guard abnormal, screen == 0 else { return }
@@ -130,7 +138,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        self.settingsWindow.title = "设置"
+        self.settingsWindow.title = L("设置")
         self.settingsWindow.isReleasedWhenClosed = false
         self.settingsWindow.toolbarStyle = .preference
         self.settingsWindow.delegate = self
@@ -140,6 +148,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toolbar.selectedItemIdentifier = SettingsToolbarIdentifiers.performance
         self.settingsWindow.toolbar = toolbar
         self.settingsWindow.contentView = NSHostingView(rootView: SettingsView().environmentObject(self.globalSettingsViewModel))
+    }
+
+    private func refreshLocalizedChrome() {
+        setMainMenu()
+        setStatusMenu()
+        settingsWindow?.title = L("设置")
+        refreshSettingsToolbarLocalization()
+        mainWindowController?.refreshLocalizedTitle()
     }
 
     func windowWillClose(_ notification: Notification) {

@@ -43,6 +43,7 @@ enum GSAppearance: String, CaseIterable, Identifiable, Codable {
 enum GSLocalization: String, CaseIterable, Identifiable, Codable {
     var id: Self { self }
     case en_US, zh_CN, followSystem
+    case zh_TW
 }
 
 enum GSVideoFramework: String, CaseIterable, Identifiable, Codable {
@@ -152,7 +153,10 @@ struct GlobalSettings: Codable, Equatable {
 class GlobalSettingsViewModel: ObservableObject {
     @Published var settings: GlobalSettings 
     {
-        didSet { validate() }
+        didSet {
+            MirageLocalization.shared.apply(settings.language)
+            validate()
+        }
     }
     
     @Published var selection = 0
@@ -175,6 +179,7 @@ class GlobalSettingsViewModel: ObservableObject {
         if !MirageRegion.isMainlandChina {
             self.settings.steamAPIEndpoint = .official
         }
+        MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
             .sink { [weak self] _ in self?.didFinishLaunchingNotification() }

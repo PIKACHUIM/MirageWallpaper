@@ -37,8 +37,8 @@ struct GeneralPage: SettingsPage {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = "选择"
-        panel.message = message
+        panel.prompt = L("选择")
+        panel.message = L(message)
         panel.begin { resp in
             if resp == .OK, let url = panel.url { completion(url) }
         }
@@ -143,6 +143,17 @@ struct GeneralPage: SettingsPage {
                     .foregroundStyle(.secondary)
             } header: {
                 Label("软件更新", systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            Section {
+                Picker("语言", selection: $viewModel.settings.language) {
+                    Text("跟随系统").tag(GSLocalization.followSystem)
+                    Text("English").tag(GSLocalization.en_US)
+                    Text("简体中文").tag(GSLocalization.zh_CN)
+                    Text("繁體中文").tag(GSLocalization.zh_TW)
+                }
+            } header: {
+                Label("语言", systemImage: "character.bubble")
             }
 
             Section {

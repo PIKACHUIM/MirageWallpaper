@@ -19,20 +19,20 @@ enum WPImportError: LocalizedError, Identifiable {
 
     var errorDescription: String? {
         switch self {
-        case .permissionDenied: return "没有访问权限"
-        case .doesNotContainWallpaper: return "文件夹内没有壁纸"
-        case .unsupportedType: return "不支持的壁纸类型"
-        case .copyFailed(let m): return "复制失败：\(m)"
-        case .unknown: return "未知错误"
+        case .permissionDenied: return L("没有访问权限")
+        case .doesNotContainWallpaper: return L("文件夹内没有壁纸")
+        case .unsupportedType: return L("不支持的壁纸类型")
+        case .copyFailed(let m): return L("复制失败：%@", m)
+        case .unknown: return L("未知错误")
         }
     }
 
     var recoverySuggestion: String? {
         switch self {
-        case .permissionDenied: return "请在“系统设置 - 隐私与安全性”中授予访问权限后重试。"
-        case .doesNotContainWallpaper: return "所选文件夹需包含 project.json，请确认后重试。"
-        case .unsupportedType: return "Mirage 仅支持 场景 / 网页 / 视频 类壁纸。"
-        case .copyFailed: return "请检查磁盘空间与权限后重试。"
+        case .permissionDenied: return L("请在“系统设置 - 隐私与安全性”中授予访问权限后重试。")
+        case .doesNotContainWallpaper: return L("所选文件夹需包含 project.json，请确认后重试。")
+        case .unsupportedType: return L("Mirage 仅支持 场景 / 网页 / 视频 类壁纸。")
+        case .copyFailed: return L("请检查磁盘空间与权限后重试。")
         case .unknown: return nil
         }
     }
@@ -131,15 +131,15 @@ final class WallpaperLibrary {
         }
 
         if isWorkshopDirectoryCustomized {
-            append(.customSteam, "自定义创意工坊目录", "用户选择的 Wallpaper Engine 内容目录", steamWorkshopDirectory, always: true)
-            append(.steam, "Steam 创意工坊目录", "系统 Steam 的默认内容目录", defaultSteamWorkshopDirectory)
+            append(.customSteam, L("自定义创意工坊目录"), L("用户选择的 Wallpaper Engine 内容目录"), steamWorkshopDirectory, always: true)
+            append(.steam, L("Steam 创意工坊目录"), L("系统 Steam 的默认内容目录"), defaultSteamWorkshopDirectory)
         } else {
-            append(.steam, "Steam 创意工坊目录", "系统 Steam 的默认内容目录", defaultSteamWorkshopDirectory, always: true)
+            append(.steam, L("Steam 创意工坊目录"), L("系统 Steam 的默认内容目录"), defaultSteamWorkshopDirectory, always: true)
         }
 
-        append(.managedSteamCMD, "Mirage 下载目录", "SteamCMD 当前下载和更新壁纸的位置", SteamCMDManager.shared.isolatedSteamCMDContentDirectory, always: true)
-        append(.legacySteamCMD, "Mirage 旧版下载目录", "仅用于兼容旧版本中已经下载的壁纸", SteamCMDManager.shared.steamCMDContentDirectory)
-        append(.imported, "导入壁纸目录", "手动导入或由视频创建的本地壁纸", importedDirectory, always: true)
+        append(.managedSteamCMD, L("Mirage 下载目录"), L("SteamCMD 当前下载和更新壁纸的位置"), SteamCMDManager.shared.isolatedSteamCMDContentDirectory, always: true)
+        append(.legacySteamCMD, L("Mirage 旧版下载目录"), L("仅用于兼容旧版本中已经下载的壁纸"), SteamCMDManager.shared.steamCMDContentDirectory)
+        append(.imported, L("导入壁纸目录"), L("手动导入或由视频创建的本地壁纸"), importedDirectory, always: true)
         return result
     }
 

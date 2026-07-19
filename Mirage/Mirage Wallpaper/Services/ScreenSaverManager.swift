@@ -14,13 +14,13 @@ enum MirageScreenSaverError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noWallpaper: return "请先播放一张壁纸"
-        case .unsupportedWallpaper: return "当前壁纸不能用作屏保"
-        case .bundledSaverMissing: return "App 内没有找到 Mirage 屏保组件"
-        case .invalidConfiguration: return "无法生成屏保配置"
-        case .invalidBundle: return "Mirage 屏保组件不完整"
-        case .screenSaverHostDidNotTerminate: return "无法结束旧的系统屏保进程，请稍后重试"
-        case .installationVerificationFailed: return "屏保安装校验失败"
+        case .noWallpaper: return L("请先播放一张壁纸")
+        case .unsupportedWallpaper: return L("当前壁纸不能用作屏保")
+        case .bundledSaverMissing: return L("App 内没有找到 Mirage 屏保组件")
+        case .invalidConfiguration: return L("无法生成屏保配置")
+        case .invalidBundle: return L("Mirage 屏保组件不完整")
+        case .screenSaverHostDidNotTerminate: return L("无法结束旧的系统屏保进程，请稍后重试")
+        case .installationVerificationFailed: return L("屏保安装校验失败")
         }
     }
 }
@@ -207,7 +207,8 @@ final class ScreenSaverManager {
             "properties": propertyValues,
             "rawProperties": rawPropertyValues,
             "fps": min(max(fps, 10), 60),
-            "fillMode": runtime.fillMode.rawValue
+            "fillMode": runtime.fillMode.rawValue,
+            "language": MirageLocalization.shared.locale.identifier
         ]
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])

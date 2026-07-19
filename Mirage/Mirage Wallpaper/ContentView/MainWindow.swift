@@ -24,7 +24,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
             backing: .buffered, defer: false))
         self.window.delegate = self
         self.window.isReleasedWhenClosed = false
-        self.window.title = "Mirage \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")"
+        refreshLocalizedTitle()
         self.window.titlebarAppearsTransparent = true
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = true
@@ -65,5 +65,9 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
                 AppDelegate.shared.contentViewModel.isStaging = true
             }
         }
+    }
+
+    func refreshLocalizedTitle() {
+        window?.title = L("Mirage %@", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
     }
 }
