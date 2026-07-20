@@ -80,13 +80,26 @@ static NSString *const kShimJS = @"\
       if(rewritten!==value)__wr_nativeSetAttribute.call(element,name,rewritten);\
     } catch(e) {}\
   }\
+  function __wr_scanElementAssets(root){\
+    if(!root||root.nodeType!==1)return;\
+    ['style','src','poster'].forEach(function(name){__wr_rewriteElementAsset(root,name);});\
+    try {\
+      root.querySelectorAll('[style],[src],[poster]').forEach(function(element){\
+        ['style','src','poster'].forEach(function(name){__wr_rewriteElementAsset(element,name);});\
+      });\
+    } catch(e) {}\
+  }\
   function __wr_installLocalAssetObserver(){\
     if(!document.documentElement||window.__wr_localAssetObserver)return;\
     var observer=new MutationObserver(function(records){\
-      records.forEach(function(record){__wr_rewriteElementAsset(record.target,record.attributeName);});\
+      records.forEach(function(record){\
+        if(record.type==='attributes')__wr_rewriteElementAsset(record.target,record.attributeName);\
+        else record.addedNodes.forEach(__wr_scanElementAssets);\
+      });\
     });\
-    observer.observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['style','src','poster']});\
+    observer.observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['src','poster']});\
     window.__wr_localAssetObserver=observer;\
+    __wr_scanElementAssets(document.documentElement);\
   }\
   if(document.documentElement)__wr_installLocalAssetObserver();\
   document.addEventListener('DOMContentLoaded',__wr_installLocalAssetObserver,{once:true});\
@@ -120,11 +133,17 @@ static NSString *const kShimJS = @"\
     }\
   };\
   var __listeners = [];\
+  function __wr_reportAudioDemand(){\
+    try {\
+      if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.wrAudioDemand)\
+        window.webkit.messageHandlers.wrAudioDemand.postMessage({needed:__listeners.length>0,count:__listeners.length});\
+    } catch(e) {}\
+  }\
   window.wallpaperRegisterAudioListener = function(cb){\
-    if (typeof cb === 'function') __listeners.push(cb);\
+    if (typeof cb === 'function' && __listeners.indexOf(cb)<0) { __listeners.push(cb); __wr_reportAudioDemand(); }\
   };\
   window.wallpaperRemoveAudioListener = function(cb){\
-    var i = __listeners.indexOf(cb); if (i >= 0) __listeners.splice(i,1);\
+    var i = __listeners.indexOf(cb); if (i >= 0) { __listeners.splice(i,1); __wr_reportAudioDemand(); }\
   };\
   window.__wr_pushAudio = function(arr){\
     for (var i=0;i<__listeners.length;i++){ try { __listeners[i](arr); } catch(e){} }\
@@ -132,35 +151,34 @@ static NSString *const kShimJS = @"\
   /* A real host pause must stop page-owned clocks as well as WE callbacks.\
      Keep a single rAF wrapper installed: replacing it for fps throttling used\
      to silently remove pause support. */\
-  var __paused=false, __fps=0, __rafSerial=1, __rafPending={}, __rafNative={}, __rafDelay={};\
+  var __paused=false, __fps=0, __rafSerial=1, __rafPending={}, __rafNative=0, __rafDelay=0;\
   var __nativeRaf=(window.requestAnimationFrame||function(cb){return setTimeout(function(){cb(performance.now());},16);}).bind(window);\
   var __nativeCancel=(window.cancelAnimationFrame||clearTimeout).bind(window);\
   var __nativeSetTimeout=window.setTimeout.bind(window), __nativeClearTimeout=window.clearTimeout.bind(window);\
-  function __runRaf(id, cb, stamp){\
-    if (!__rafPending[id]) return;\
-    if (__paused) { __rafNative[id]=0; __rafDelay[id]=0; return; }\
+  function __runRaf(stamp){\
+    __rafNative=0;__rafDelay=0;\
+    if (__paused) return;\
     if (__fps>0&&__fps<60) window.__wr_lastRaf=performance.now();\
-    delete __rafPending[id]; delete __rafNative[id]; cb(stamp);\
+    var callbacks=__rafPending;__rafPending={};\
+    Object.keys(callbacks).forEach(function(id){try{callbacks[id](stamp);}catch(e){__nativeSetTimeout(function(){throw e;},0);}});\
   }\
-  function __scheduleRaf(id){\
-    var cb=__rafPending[id]; if (!cb||__paused) return;\
+  function __scheduleRaf(){\
+    if (__paused||__rafNative||__rafDelay||!Object.keys(__rafPending).length) return;\
     var interval=__fps>0&&__fps<60?1000/__fps:0;\
     if (interval) {\
       var now=performance.now(), wait=window.__wr_lastRaf?Math.max(0,interval-(now-window.__wr_lastRaf)):0;\
-      __rafDelay[id]=__nativeSetTimeout(function(){\
-        delete __rafDelay[id]; __runRaf(id,cb,performance.now());\
+      __rafDelay=__nativeSetTimeout(function(){\
+        __rafDelay=0; __rafNative=__nativeRaf(function(t){__runRaf(t);});\
       },wait);\
     } else {\
-      __rafNative[id]=__nativeRaf(function(t){__runRaf(id,cb,t);});\
+      __rafNative=__nativeRaf(function(t){__runRaf(t);});\
     }\
   }\
   window.requestAnimationFrame=function(cb){\
-    var id=__rafSerial++; __rafPending[id]=cb; __scheduleRaf(id); return id;\
+    var id=__rafSerial++; __rafPending[id]=cb; __scheduleRaf(); return id;\
   };\
   window.cancelAnimationFrame=function(id){\
-    if (__rafNative[id]) __nativeCancel(__rafNative[id]);\
-    if (__rafDelay[id]) __nativeClearTimeout(__rafDelay[id]);\
-    delete __rafNative[id]; delete __rafDelay[id]; delete __rafPending[id];\
+    delete __rafPending[id];\
   };\
   window.__wr_setFps=function(fps){ __fps=(!isFinite(fps)||fps<=0||fps>=60)?0:fps; window.__wr_lastRaf=0; };\
   var __timerSerial=1, __timers={};\
@@ -172,7 +190,7 @@ static NSString *const kShimJS = @"\
       var current=__timers[id]; if (!current) return; current.native=0;\
       if (__paused) { current.remaining=Math.max(0,current.due-Date.now()); return; }\
       if (!current.repeat) delete __timers[id];\
-      try { current.fn.apply(window,current.args); } catch(e){ setTimeout(function(){throw e;},0); }\
+      try { current.fn.apply(window,current.args); } catch(e){ __nativeSetTimeout(function(){throw e;},0); }\
       if (current.repeat&&__timers[id]) { current.remaining=current.delay; __scheduleTimer(id); }\
     },t.remaining);\
   }\
@@ -197,51 +215,48 @@ static NSString *const kShimJS = @"\
     if(p)root.classList.add('__wr-paused');else root.classList.remove('__wr-paused');\
   }\
   window.__wr_pauseStreams=__pauseMedia; window.__wr_resumeStreams=__resumeMedia;\
-  var __wr_pendingProps={},__wr_propsTimer=0,__wr_propsDelay=25;\
+  var __wr_pendingProps={},__wr_listener=null;\
   function __wr_flushProps(){\
-    __wr_propsTimer=0;\
-    var listener=window.wallpaperPropertyListener;\
+    var listener=__wr_listener;\
     if(listener&&typeof listener.applyUserProperties==='function'){\
       try {\
         var applied=__wr_pendingProps;\
-        listener.applyUserProperties(applied);__wr_pendingProps={};__wr_propsDelay=25;\
-        return;\
+        if(Object.keys(applied).length){listener.applyUserProperties(applied);__wr_pendingProps={};}\
+        return true;\
       }\
       catch(e){ console.error('WebRenderer applyUserProperties:',e); }\
     }\
-    if(Object.keys(__wr_pendingProps).length){\
-      __wr_propsTimer=__nativeSetTimeout(__wr_flushProps,__wr_propsDelay);\
-      __wr_propsDelay=Math.min(250,__wr_propsDelay*2);\
-    }\
+    return false;\
   }\
+  try {\
+    Object.defineProperty(window,'wallpaperPropertyListener',{configurable:true,enumerable:true,\
+      get:function(){return __wr_listener;},set:function(value){__wr_listener=value;__wr_flushProps();}});\
+  } catch(e) { __wr_listener=window.wallpaperPropertyListener||null; }\
   window.__wr_applyProps=function(props){\
     if(!props||typeof props!=='object')return;\
     Object.keys(props).forEach(function(key){__wr_pendingProps[key]=props[key];});\
-    if(!__wr_propsTimer)__wr_flushProps();\
+    __wr_flushProps();\
   };\
   window.__wr_applySnapshot=function(props,generation){\
     if(!props||typeof props!=='object')return -1;\
-    var listener=window.wallpaperPropertyListener;\
-    if(!listener||typeof listener.applyUserProperties!=='function')return 0;\
     try {\
-      if(__wr_propsTimer){__nativeClearTimeout(__wr_propsTimer);__wr_propsTimer=0;}\
-      __wr_pendingProps={};\
-      listener.applyUserProperties(props);\
+      Object.keys(props).forEach(function(key){__wr_pendingProps[key]=props[key];});\
+      var applied=__wr_flushProps();\
       if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.wrProperties)\
-        window.webkit.messageHandlers.wrProperties.postMessage({generation:String(generation||'snapshot'),count:Object.keys(props).length});\
-      return 1;\
+        window.webkit.messageHandlers.wrProperties.postMessage({generation:String(generation||'snapshot'),count:Object.keys(props).length,applied:applied});\
+      return applied?1:0;\
     } catch(e) { console.error('WebRenderer applyUserProperties:',e); return -1; }\
   };\
   window.__wr_setPaused = function(p){\
     p=!!p; if (__paused===p) return; __paused=p; window.wallpaperEngine_paused=p;\
     __setCssPaused(p);\
     if(p){\
-      Object.keys(__rafNative).forEach(function(id){if(__rafNative[id])__nativeCancel(__rafNative[id]);__rafNative[id]=0;});\
-      Object.keys(__rafDelay).forEach(function(id){if(__rafDelay[id])__nativeClearTimeout(__rafDelay[id]);__rafDelay[id]=0;});\
+      if(__rafNative)__nativeCancel(__rafNative);__rafNative=0;\
+      if(__rafDelay)__nativeClearTimeout(__rafDelay);__rafDelay=0;\
       Object.keys(__timers).forEach(function(id){var t=__timers[id];if(t.native){__nativeClearTimeout(t.native);t.native=0;t.remaining=Math.max(0,t.due-Date.now());}});\
       __pauseMedia();\
     }else{\
-      Object.keys(__rafPending).forEach(function(id){__scheduleRaf(id);});\
+      __scheduleRaf();\
       Object.keys(__timers).forEach(function(id){__scheduleTimer(id);});\
       __resumeMedia();\
     }\
@@ -309,6 +324,10 @@ static NSString *const kDefaultUserAgent =
 @property (nonatomic, copy) NSString *userPropertyGeneration;
 @property (nonatomic, assign) NSUInteger propertyApplySerial;
 @property (nonatomic, assign) BOOL propertySnapshotApplied;
+@property (nonatomic, assign) BOOL audioSpectrumStarted;
+@property (nonatomic, assign) BOOL audioSpectrumRequested;
+@property (nonatomic, assign) BOOL audioListenerDemand;
+@property (nonatomic, assign) BOOL paused;
 @end
 
 @implementation WebRendererEngine {
@@ -322,6 +341,7 @@ static NSString *const kDefaultUserAgent =
     c.enableAudioPlayback = YES;
     c.initialVolume = 1.0f;
     c.frameRate = 60;
+    c.loadFromMemory = NO;
     c.userAgent = nil;
     c.assetOverlayDirectories = nil;
     return c;
@@ -347,8 +367,11 @@ static NSString *const kDefaultUserAgent =
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
     [ucc addUserScript:shim];
-    [ucc addScriptMessageHandler:self name:@"wrConsole"];
+    if (_config.enableInspector || getenv("WR_DEBUG") != NULL) {
+        [ucc addScriptMessageHandler:self name:@"wrConsole"];
+    }
     [ucc addScriptMessageHandler:self name:@"wrProperties"];
+    [ucc addScriptMessageHandler:self name:@"wrAudioDemand"];
     cfg.userContentController = ucc;
     cfg.preferences.javaScriptCanOpenWindowsAutomatically = YES;
     cfg.suppressesIncrementalRendering = NO;
@@ -382,6 +405,8 @@ static NSString *const kDefaultUserAgent =
 
     _schemeHandler.baseDirectory = manifest.workshopDir;
     _schemeHandler.overlayDirectories = _config.assetOverlayDirectories ?: @[];
+    [_schemeHandler clearMemoryCache];
+    _schemeHandler.loadFromMemory = _config.loadFromMemory;
     NSString *entry = manifest.entryHTML ?: @"index.html";
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"we-wallpaper://wallpaper/%@", entry]];
     fprintf(stderr, "WebRenderer: loading %s\n", entry.UTF8String ?: "index.html");
@@ -442,6 +467,7 @@ static NSString *const kDefaultUserAgent =
 }
 
 - (void)applyPropertySnapshotWithSerial:(NSUInteger)serial attempt:(NSUInteger)attempt {
+    (void)attempt;
     if (!_didFinishLoad || serial != _propertyApplySerial || _userPropertySnapshot == nil) return;
     NSString *json = [self jsLiteralForObject:_userPropertySnapshot];
     NSString *generationJSON = [self jsLiteralForObject:_userPropertyGeneration ?: @"snapshot"];
@@ -465,17 +491,8 @@ static NSString *const kDefaultUserAgent =
                     self.userPropertyGeneration.UTF8String ?: "snapshot");
             return;
         }
-        if (attempt >= 480) {
-            fprintf(stderr, "WebRenderer: property listener did not become ready for generation=%s\n",
-                    self.userPropertyGeneration.UTF8String ?: "snapshot");
-            return;
-        }
-        NSUInteger delayStep = MIN(attempt, (NSUInteger)4);
-        NSTimeInterval delay = MIN(0.25, 0.025 * (1u << delayStep));
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [self applyPropertySnapshotWithSerial:serial attempt:attempt + 1];
-        });
+        // The document-start shim retains the snapshot and applies it from the
+        // wallpaperPropertyListener setter when the page installs its listener.
     }];
 }
 
@@ -502,7 +519,12 @@ static NSString *const kDefaultUserAgent =
 }
 
 - (void)setPaused:(BOOL)paused {
+    _paused = paused;
     [self eval:[NSString stringWithFormat:@"__wr_setPaused(%@);", paused ? @"true" : @"false"]];
+    [self reconcileAudioSpectrum];
+    if (self.audioSpectrumDemandHandler != nil) {
+        self.audioSpectrumDemandHandler(_audioListenerDemand && !paused);
+    }
 }
 
 - (void)setVolume:(float)volume {
@@ -525,12 +547,30 @@ static NSString *const kDefaultUserAgent =
 #pragma mark - Audio spectrum
 
 - (void)startAudioSpectrum {
-    if (!_config.enableAudioSpectrum || _audioTimer != nil) return;
+    _audioSpectrumRequested = YES;
+    [self reconcileAudioSpectrum];
+}
+
+- (void)reconcileAudioSpectrum {
+    BOOL needed = _audioSpectrumRequested && _config.enableAudioSpectrum &&
+                  _audioListenerDemand && !_paused;
+    if (!needed) {
+        if (_audioSpectrumStarted) {
+            [_audioTimer invalidate];
+            _audioTimer = nil;
+            [_audioTap stop];
+            _audioSpectrumStarted = NO;
+        }
+        return;
+    }
+    if (_audioSpectrumStarted) return;
+    _audioSpectrumStarted = YES;
     __weak WebRendererEngine *weakSelf = self;
     [_audioTap startWithCompletion:^(BOOL ok, NSString *msg) {
         __strong WebRendererEngine *s = weakSelf;
         if (!s) return;
         if (!ok) {
+            s->_audioSpectrumStarted = NO;
             fprintf(stderr, "WebRenderer: audio spectrum disabled (%s)\n",
                     msg ? msg.UTF8String : "unknown");
             return;
@@ -545,9 +585,11 @@ static NSString *const kDefaultUserAgent =
 }
 
 - (void)stopAudioSpectrum {
+    _audioSpectrumRequested = NO;
     [_audioTimer invalidate];
     _audioTimer = nil;
     [_audioTap stop];
+    _audioSpectrumStarted = NO;
 }
 
 - (void)tickAudio {
@@ -574,7 +616,7 @@ static NSString *const kDefaultUserAgent =
 }
 
 - (void)pushAudioSpectrum:(NSArray<NSNumber *> *)spectrum {
-    if (spectrum.count != 128) return;
+    if (!_audioListenerDemand || _paused || spectrum.count != 128) return;
     NSData *data = [NSJSONSerialization dataWithJSONObject:spectrum options:0 error:nil];
     if (data == nil) return;
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -644,6 +686,18 @@ static NSString *const kDefaultUserAgent =
         fprintf(stderr, "WebRenderer: applied property snapshot generation=%s count=%ld\n",
                 [body[@"generation"] description].UTF8String ?: "unknown",
                 (long)[body[@"count"] integerValue]);
+        return;
+    }
+    if ([message.name isEqualToString:@"wrAudioDemand"]) {
+        NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+        BOOL needed = [body[@"needed"] boolValue];
+        if (_audioListenerDemand != needed) {
+            _audioListenerDemand = needed;
+            [self reconcileAudioSpectrum];
+            if (self.audioSpectrumDemandHandler != nil) {
+                self.audioSpectrumDemandHandler(needed && !_paused);
+            }
+        }
         return;
     }
     if (![message.name isEqualToString:@"wrConsole"]) return;

@@ -38,6 +38,7 @@ struct WallpaperArgs {
     int   runSeconds = 0;
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
+    BOOL  loadFromMemory = NO;
     std::vector<std::string> assetOverlays;
 };
 
@@ -52,6 +53,7 @@ static void PrintUsage(const char *argv0) {
         "  --screen N             screen index to cover (default 0 = main)\n"
         "  --asset-overlay DIR    serve preset assets before base assets\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
+        "  --load-from-memory     cache wallpaper resources in memory\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
         "  -h, --help             show this help\n",
@@ -85,6 +87,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.diag = YES;
         } else if (strcmp(arg, "--control-stdin") == 0) {
             out.controlStdin = YES;
+        } else if (strcmp(arg, "--load-from-memory") == 0) {
+            out.loadFromMemory = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg); return false;
         } else {
@@ -147,6 +151,7 @@ int main(int argc, char *argv[]) {
         cfg.enableAudioSpectrum = args.spectrum && !args.externalSpectrum;
         cfg.initialVolume = args.volume;
         cfg.frameRate = args.fps;
+        cfg.loadFromMemory = args.loadFromMemory;
         NSMutableArray<NSString *> *assetOverlays = [NSMutableArray arrayWithCapacity:args.assetOverlays.size()];
         for (const auto &path : args.assetOverlays) {
             NSString *overlay = [NSString stringWithUTF8String:path.c_str()];
@@ -156,6 +161,11 @@ int main(int argc, char *argv[]) {
 
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:screenFrame config:cfg];
         delegate.engine = engine;
+        engine.audioSpectrumDemandHandler = ^(BOOL needed) {
+            fprintf(stdout, "{\"event\":\"audio-demand\",\"needed\":%s}\n",
+                    needed ? "true" : "false");
+            fflush(stdout);
+        };
 
         WebWallpaperWindow *window = [[WebWallpaperWindow alloc]
             initWithContentRect:screenFrame
@@ -218,8 +228,10 @@ int main(int argc, char *argv[]) {
                         }
                     } else if ([name isEqualToString:@"pause"]) {
                         [eng setPaused:YES];
+                        [delegate.inputForwarder setPaused:YES];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng setPaused:NO];
+                        [delegate.inputForwarder setPaused:NO];
                     } else if ([name isEqualToString:@"volume"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {
