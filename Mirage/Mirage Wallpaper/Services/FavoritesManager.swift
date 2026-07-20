@@ -11,13 +11,14 @@ final class FavoritesManager {
 
     private let key = "FavoriteWallpapers"
 
-    private var ids: Set<String> {
-        get {
-            Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
-        }
-        set {
-            UserDefaults.standard.set(Array(newValue), forKey: key)
-        }
+    private var ids: Set<String>
+
+    private init() {
+        ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    private func persist() {
+        UserDefaults.standard.set(Array(ids), forKey: key)
     }
 
     func isFavorite(_ id: String) -> Bool {
@@ -25,24 +26,21 @@ final class FavoritesManager {
     }
 
     func toggle(_ id: String) {
-        var current = ids
-        if current.contains(id) {
-            current.remove(id)
+        if ids.contains(id) {
+            ids.remove(id)
         } else {
-            current.insert(id)
+            ids.insert(id)
         }
-        ids = current
+        persist()
     }
 
     func add(_ id: String) {
-        var current = ids
-        current.insert(id)
-        ids = current
+        ids.insert(id)
+        persist()
     }
 
     func remove(_ id: String) {
-        var current = ids
-        current.remove(id)
-        ids = current
+        ids.remove(id)
+        persist()
     }
 }

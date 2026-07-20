@@ -15,9 +15,16 @@ struct ScreenSaverFeedback: Identifiable {
 }
 
 class ContentViewModel: ObservableObject, DropDelegate {
-    @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name
-    @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase
-    
+    @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name {
+        didSet {
+            currentPage = 1
+            if sortingBy == .fileSize { prewarmWallpaperSizes() }
+        }
+    }
+    @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase {
+        didSet { currentPage = 1 }
+    }
+
     @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.all { didSet { currentPage = 1 } }
     @AppStorage("FRType") public var type = FRType.all { didSet { currentPage = 1 } }
     @AppStorage("FRAgeRating") public var ageRating = FRAgeRating.all { didSet { currentPage = 1 } }
@@ -56,23 +63,23 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     @Published var isSteamSetupPresented = false
     
-    @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50
+    @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50 {
+        didSet { currentPage = 1 }
+    }
     
     var importAlertError: WPImportError? = nil
 
     private var downloadObserver: AnyCancellable?
     private var favoritesObserver: AnyCancellable?
+    private var refreshWorkItem: DispatchWorkItem?
+    private var refreshInFlight = false
+    private var refreshAgain = false
 
     convenience init(isStaging: Bool, topTabBarSelection: Int = 0) {
         self.init()
         self.isStaging = isStaging
         self.topTabBarSelection = topTabBarSelection
-        DispatchQueue.global(qos: .userInitiated).async {
-            let loaded = WallpaperLibrary.shared.loadAll()
-            DispatchQueue.main.async {
-                self.wallpapers = loaded
-            }
-        }
+        refresh()
     }
 
     init() {
@@ -89,13 +96,11 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             WallpaperLibrary.shared.startMonitoringWorkshopDirectory { [weak self] in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    self?.refresh()
-                }
+                self?.scheduleRefresh()
             }
         }
     }
-    
+
     @Published public var currentPage: Int = 1
 
     private var allWallpapers: [WEWallpaper] { wallpapers }
@@ -118,32 +123,33 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
     
     private var searchedWallpapers: [WEWallpaper] {
-        allWallpapers.filter { wallpaper in
+        let query = searchText.lowercased()
+        return allWallpapers.filter { wallpaper in
             let project = wallpaper.project
-            let searchText = searchText.lowercased()
             
-            guard !searchText.isEmpty else { return true }
+            guard !query.isEmpty else { return true }
             
-            guard !project.title.lowercased().contains(searchText) else { return true }
+            guard !project.title.lowercased().contains(query) else { return true }
             
-            guard !project.type.lowercased().contains(searchText) else { return true }
+            guard !project.type.lowercased().contains(query) else { return true }
             
             if let description = project.description?.lowercased() {
-                guard !description.contains(searchText) else { return true }
+                guard !description.contains(query) else { return true }
             }
             
             if let tags = project.tags {
-                guard !tags.allSatisfy({ $0.lowercased().contains(searchText) })
-                else { return true }
+                if tags.contains(where: { $0.localizedCaseInsensitiveContains(query) }) {
+                    return true
+                }
             }
             
             if let workshopid = project.workshopid {
-                guard !workshopid.rawValue.contains(searchText) else { return true }
+                guard !workshopid.rawValue.contains(query) else { return true }
             }
             
             guard !wallpaper.wallpaperDirectory.lastPathComponent
                 .lowercased()
-                .contains(searchText) else { return true }
+                .contains(query) else { return true }
             
             return false
         }
@@ -230,55 +236,52 @@ class ContentViewModel: ObservableObject, DropDelegate {
     
     private var sortedWallpapers: [WEWallpaper] {
         filteredWallpapers.sorted {
+            let comparison: ComparisonResult
             switch sortingBy {
             case .name:
-                if $0.project.title <= $1.project.title,
-                      sortingSequence == .increase
-                 { return false }
-                
-                if $0.project.title >= $1.project.title,
-                      sortingSequence == .decrease
-                 { return false }
-                
-                return true
+                comparison = $0.project.title.localizedStandardCompare($1.project.title)
             case .rating:
-                if $0.project.contentrating ?? "0" <= $1.project.contentrating ?? "0",
-                      sortingSequence == .increase
-                 { return false }
-                
-                if $0.project.contentrating ?? "0" >= $1.project.contentrating ?? "0",
-                      sortingSequence == .decrease
-                 { return false }
-                
-                return true
+                comparison = ($0.project.contentrating ?? "0")
+                    .localizedStandardCompare($1.project.contentrating ?? "0")
             case .fileSize:
-                if $0.wallpaperSize <= $1.wallpaperSize,
-                      sortingSequence == .increase
-                 { return false }
-                
-                if $0.project.title >= $1.project.title,
-                      sortingSequence == .decrease
-                 { return false }
-                
-                return true
+                if $0.wallpaperSize == $1.wallpaperSize {
+                    comparison = $0.project.title.localizedStandardCompare($1.project.title)
+                } else {
+                    comparison = $0.wallpaperSize < $1.wallpaperSize ? .orderedAscending : .orderedDescending
+                }
             }
+            return sortingSequence == .increase
+                ? comparison == .orderedAscending
+                : comparison == .orderedDescending
         }
     }
-    
-    public var autoRefreshWallpapers: [WEWallpaper] {
+
+    struct WallpaperPage {
+        let items: [WEWallpaper]
+        let pageCount: Int
+    }
+
+    var wallpaperPage: WallpaperPage {
         let all = sortedWallpapers
-        guard wallpapersPerPage > 0 else { return all }
+        guard wallpapersPerPage > 0 else {
+            return WallpaperPage(items: all, pageCount: 1)
+        }
         let pageCount = max(1, Int(ceil(Double(all.count) / Double(wallpapersPerPage))))
         let page = min(max(currentPage, 1), pageCount)
         let startIndex = (page - 1) * wallpapersPerPage
-        guard startIndex < all.count else { return [] }
+        guard startIndex < all.count else {
+            return WallpaperPage(items: [], pageCount: pageCount)
+        }
         let endIndex = min(startIndex + wallpapersPerPage, all.count)
-        return Array(all[startIndex..<endIndex])
+        return WallpaperPage(items: Array(all[startIndex..<endIndex]), pageCount: pageCount)
+    }
+
+    public var autoRefreshWallpapers: [WEWallpaper] {
+        wallpaperPage.items
     }
 
     var maxPage: Int {
-        guard wallpapersPerPage > 0 else { return 1 }
-        return max(1, Int(ceil(Double(self.sortedWallpapers.count) / Double(self.wallpapersPerPage))))
+        wallpaperPage.pageCount
     }
     
     func toggleFilter() {
@@ -323,11 +326,47 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
     
     public func refresh() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.refresh() }
+            return
+        }
+        if refreshInFlight {
+            refreshAgain = true
+            return
+        }
+        refreshInFlight = true
+        let shouldPrewarmSizes = sortingBy == .fileSize
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = WallpaperLibrary.shared.loadAll()
+            if shouldPrewarmSizes {
+                loaded.forEach { _ = $0.wallpaperSize }
+            }
             DispatchQueue.main.async {
                 self.wallpapers = loaded
+                self.refreshInFlight = false
+                if self.refreshAgain {
+                    self.refreshAgain = false
+                    self.refresh()
+                }
             }
+        }
+    }
+
+    private func scheduleRefresh() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.refresh() }
+            self.refreshWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+        }
+    }
+
+    private func prewarmWallpaperSizes() {
+        let snapshot = wallpapers
+        DispatchQueue.global(qos: .utility).async {
+            snapshot.forEach { _ = $0.wallpaperSize }
+            DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
         }
     }
     

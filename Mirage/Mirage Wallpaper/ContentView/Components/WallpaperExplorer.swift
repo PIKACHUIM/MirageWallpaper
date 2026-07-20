@@ -16,8 +16,9 @@ struct WallpaperExplorer: SubviewOfContentView {
     }
     
     var body: some View {
+        let page = viewModel.wallpaperPage
         ScrollView {
-            if viewModel.autoRefreshWallpapers.isEmpty {
+            if page.items.isEmpty {
                 HStack {
                     Spacer()
                     Text("""
@@ -38,7 +39,7 @@ struct WallpaperExplorer: SubviewOfContentView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: viewModel.explorerIconSize, 
                                                        maximum: viewModel.explorerIconSize * 2)
                 )], alignment: .leading) {
-                    ForEach(Array(viewModel.autoRefreshWallpapers.enumerated()), id: \.0) { (index, wallpaper) in
+                    ForEach(Array(page.items.enumerated()), id: \.element.id) { (index, wallpaper) in
                         ExplorerItem(viewModel: viewModel, wallpaperViewModel: wallpaperViewModel, wallpaper: wallpaper, index: index)
                             .contextMenu {
                                 ExplorerItemMenu(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel, current: wallpaper)
@@ -54,9 +55,9 @@ struct WallpaperExplorer: SubviewOfContentView {
             VStack {
                 Spacer()
                 HStack {
-                    ForEach(0..<viewModel.maxPage, id: \.self) { page in
-                        Button("\(page + 1)") {
-                            viewModel.currentPage = page + 1
+                    ForEach(0..<page.pageCount, id: \.self) { pageIndex in
+                        Button("\(pageIndex + 1)") {
+                            viewModel.currentPage = pageIndex + 1
                         }
                     }
                 }

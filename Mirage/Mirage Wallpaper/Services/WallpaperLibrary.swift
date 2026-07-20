@@ -60,6 +60,12 @@ final class WallpaperLibrary {
     static let shared = WallpaperLibrary()
 
     private let fm = FileManager.default
+    private struct CachedWallpaper {
+        let signature: String
+        let wallpaper: WEWallpaper
+    }
+    private let loadCacheLock = NSLock()
+    private var loadCache: [String: CachedWallpaper] = [:]
 
     private let workshopKey = "CustomWorkshopDirectory"
     private let importedKey = "CustomImportedDirectory"
@@ -175,7 +181,33 @@ final class WallpaperLibrary {
     }
 
     func loadAll() -> [WEWallpaper] {
-        allWallpaperURLs().map { WEWallpaper.load(from: $0) }
+        let urls = allWallpaperURLs()
+        loadCacheLock.lock()
+        let previous = loadCache
+        loadCacheLock.unlock()
+
+        var next: [String: CachedWallpaper] = [:]
+        next.reserveCapacity(urls.count)
+        let wallpapers = urls.map { url -> WEWallpaper in
+            let path = url.standardizedFileURL.path
+            let projectURL = url.appending(path: "project.json")
+            let projectValues = try? projectURL.resourceValues(
+                forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let directoryValues = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            let signature = "\(projectValues?.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(projectValues?.fileSize ?? 0)#\(directoryValues?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+            if let cached = previous[path], cached.signature == signature {
+                next[path] = cached
+                return cached.wallpaper
+            }
+            let wallpaper = WEWallpaper.load(from: url)
+            next[path] = CachedWallpaper(signature: signature, wallpaper: wallpaper)
+            return wallpaper
+        }
+
+        loadCacheLock.lock()
+        loadCache = next
+        loadCacheLock.unlock()
+        return wallpapers
     }
 
     // MARK: - 导入

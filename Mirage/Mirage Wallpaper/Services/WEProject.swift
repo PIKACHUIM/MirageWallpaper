@@ -585,9 +585,16 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
 
     var wallpaperSize: Int {
         let path = wallpaperDirectory.path(percentEncoded: false)
-        if let cached = Self.sizeCache[path] { return cached }
+        Self.sizeCacheLock.lock()
+        if let cached = Self.sizeCache[path] {
+            Self.sizeCacheLock.unlock()
+            return cached
+        }
+        Self.sizeCacheLock.unlock()
         let size = (try? wallpaperDirectory.directoryTotalAllocatedSize(includingSubfolders: true)) ?? 0
+        Self.sizeCacheLock.lock()
         Self.sizeCache[path] = size
+        Self.sizeCacheLock.unlock()
         return size
     }
 
@@ -616,8 +623,13 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     }
 
     nonisolated(unsafe) static var sizeCache: [String: Int] = [:]
+    static let sizeCacheLock = NSLock()
 
-    static func invalidateSizeCache() { sizeCache.removeAll() }
+    static func invalidateSizeCache() {
+        sizeCacheLock.lock()
+        sizeCache.removeAll()
+        sizeCacheLock.unlock()
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

@@ -7,6 +7,7 @@
 import Cocoa
 import SwiftUI
 import AVKit
+import CryptoKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -21,6 +22,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var importOpenPanel: NSOpenPanel!
     private var localizationObserver: NSObjectProtocol?
+    private let placeholderLock = NSLock()
+    private var placeholderIdentity: String?
+    private var placeholderInFlightIdentity: String?
+    private var placeholderGeneration: UInt64 = 0
+    private var placeholderCachePruneScheduled = false
 
     static var shared = AppDelegate()
 
@@ -87,16 +93,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        wallpaperViewModel.saveRuntime()
         wallpaperViewModel.renderer.stopAll()
 
         if let wallpaper = UserDefaults.standard.url(forKey: "OSWallpaper") {
             try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: .main!)
-        }
-        let cacheDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        if let filesURL = try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
-            for url in filesURL where url.lastPathComponent.contains("staticWP") {
-                try? FileManager.default.removeItem(at: url)
-            }
         }
     }
 
@@ -139,18 +140,121 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func setPlaceholderWallpaper(with wallpaper: WEWallpaper) {
-        guard wallpaper.kind == .video else { return }
+        guard wallpaper.kind == .video,
+              globalSettingsViewModel.settings.adjustMenuBarTint else { return }
+        let values = try? wallpaper.entryURL.resourceValues(
+            forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let screen = NSScreen.main
+        let targetSize = CGSize(
+            width: (screen?.frame.width ?? 1920) * (screen?.backingScaleFactor ?? 1),
+            height: (screen?.frame.height ?? 1080) * (screen?.backingScaleFactor ?? 1))
+        let identity = "\(wallpaper.entryURL.path)#\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(values?.fileSize ?? 0)#\(Int(targetSize.width))x\(Int(targetSize.height))"
+        let digest = SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "staticWP_\(digest).tiff")
+
+        let fileExists = FileManager.default.fileExists(atPath: url.path)
+        placeholderLock.lock()
+        if placeholderIdentity != identity {
+            placeholderIdentity = identity
+            placeholderGeneration &+= 1
+            placeholderInFlightIdentity = nil
+        }
+        let generation = placeholderGeneration
+        let alreadyGenerating = placeholderInFlightIdentity == identity
+        if !fileExists && !alreadyGenerating {
+            placeholderInFlightIdentity = identity
+        }
+        placeholderLock.unlock()
+
+        if fileExists {
+            try? FileManager.default.setAttributes(
+                [.modificationDate: Date()], ofItemAtPath: url.path)
+            schedulePlaceholderCachePrune(keeping: url)
+            applyPlaceholderIfCurrent(url, wallpaper: wallpaper, generation: generation)
+            return
+        }
+        guard !alreadyGenerating else { return }
+
         let asset = AVAsset(url: wallpaper.entryURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
+        imageGenerator.maximumSize = targetSize
         let time = CMTimeMake(value: 1, timescale: 1)
-        imageGenerator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, _, error in
-            guard error == nil, let cgImage else { return }
+        imageGenerator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) {
+            [weak self] _, cgImage, _, _, error in
+            guard let self else { return }
+            self.placeholderLock.lock()
+            let current = self.placeholderGeneration == generation &&
+                self.placeholderIdentity == identity
+            if self.placeholderInFlightIdentity == identity {
+                self.placeholderInFlightIdentity = nil
+            }
+            self.placeholderLock.unlock()
+            guard current, error == nil, let cgImage else { return }
             let nsImage = NSImage(cgImage: cgImage, size: .zero)
             guard let data = nsImage.tiffRepresentation else { return }
-            let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appending(path: "staticWP_\(wallpaper.wallpaperDirectory.hashValue).tiff")
             try? data.write(to: url, options: .atomic)
+            self.schedulePlaceholderCachePrune(keeping: url)
+            DispatchQueue.main.async {
+                self.applyPlaceholderIfCurrent(url, wallpaper: wallpaper,
+                                               generation: generation)
+            }
         }
+    }
+
+    private func schedulePlaceholderCachePrune(keeping keepURL: URL) {
+        placeholderLock.lock()
+        guard !placeholderCachePruneScheduled else {
+            placeholderLock.unlock()
+            return
+        }
+        placeholderCachePruneScheduled = true
+        placeholderLock.unlock()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            defer {
+                self.placeholderLock.lock()
+                self.placeholderCachePruneScheduled = false
+                self.placeholderLock.unlock()
+            }
+            let directory = keepURL.deletingLastPathComponent()
+            let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: Array(keys),
+                options: .skipsHiddenFiles) else { return }
+            let entries = urls.filter { $0.lastPathComponent.hasPrefix("staticWP_") }
+                .compactMap { url -> (URL, Date, Int)? in
+                    let values = try? url.resourceValues(forKeys: keys)
+                    return (url, values?.contentModificationDate ?? .distantPast,
+                            values?.fileSize ?? 0)
+                }
+                .sorted { $0.1 > $1.1 }
+            var retainedBytes = 0
+            var retainedCount = 0
+            for entry in entries {
+                let fits = retainedCount < 8 &&
+                    retainedBytes + entry.2 <= 256 * 1024 * 1024
+                if entry.0 == keepURL || fits {
+                    retainedBytes += entry.2
+                    retainedCount += 1
+                } else {
+                    try? FileManager.default.removeItem(at: entry.0)
+                }
+            }
+        }
+    }
+
+    private func applyPlaceholderIfCurrent(_ url: URL, wallpaper: WEWallpaper,
+                                           generation: UInt64) {
+        placeholderLock.lock()
+        let current = placeholderGeneration == generation && placeholderIdentity != nil
+        placeholderLock.unlock()
+        guard current,
+              globalSettingsViewModel.settings.adjustMenuBarTint,
+              wallpaperViewModel.currentWallpaper.id == wallpaper.id,
+              let screen = NSScreen.main else { return }
+        try? NSWorkspace.shared.setDesktopImageURL(url, for: screen)
     }
 }

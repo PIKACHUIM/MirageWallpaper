@@ -10,7 +10,7 @@ struct ExplorerItem: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
-    private let animates = true
+    @State private var hovering = false
 
     var wallpaper: WEWallpaper
     var index: Int
@@ -19,7 +19,9 @@ struct ExplorerItem: SubviewOfContentView {
         ZStack(alignment: .bottom) {
             GifImage(contentsOf: wallpaper.project.preview.isEmpty
                 ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                : wallpaper.previewURL, animates: animates)
+                : wallpaper.previewURL,
+                     animates: hovering ||
+                         wallpaper.wallpaperDirectory == wallpaperViewModel.currentWallpaper.wallpaperDirectory)
             .resizable()
             .scaleEffect(viewModel.imageScaleIndex == index ? 1.2 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
@@ -58,5 +60,6 @@ struct ExplorerItem: SubviewOfContentView {
         .onTapGesture {
             AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)
         }
+        .onHover { hovering = $0 }
     }
 }
