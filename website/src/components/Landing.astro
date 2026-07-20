@@ -68,7 +68,7 @@ const t = isEnglish ? {
         <p>{t.heroText}</p>
         <div class="hero-actions"><a class="primary-action" href={install} target="_blank" rel="noreferrer">{t.getStarted}<span aria-hidden="true">↗</span></a><a class="secondary-action" href={docs}>{t.readDocs}<span aria-hidden="true">→</span></a></div>
       </div>
-      <figure class="product-stage landing-shell mirage-reveal" data-delay="100">
+      <figure class="product-stage landing-shell hero-stage-enter">
         <div class="stage-label"><span>{t.screenshotLabel}</span><small>{t.screenshotMeta}</small></div>
         <img src={local('/images/docs/library-overview.webp')} alt={t.screenshot} width="2200" height="1254" loading="eager" />
       </figure>
