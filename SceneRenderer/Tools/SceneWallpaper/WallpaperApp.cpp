@@ -1,6 +1,9 @@
 #include "../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.h"
 #include "ControlChannel.h"
 
+#define VK_USE_PLATFORM_METAL_EXT
+#include <vulkan/vulkan.h>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -60,9 +63,6 @@ void InstallCrashHandler() {
 }
 } // namespace
 
-extern "C" void SceneRendererSetLiveMetalFrameCallback(
-    void (*cb)(void*, std::uint32_t, std::uint32_t, void*), void* userdata);
-
 namespace
 {
 
@@ -81,6 +81,7 @@ struct Options {
     std::uint32_t             fps { 30 };
     std::uint32_t             input_hz { 60 };
     std::uint32_t             msaa { 1 };
+    double                    render_scale { 1.0 };
     std::uint32_t             screen { 0 };
     int                       run_seconds { 0 };
     bool                      valid_layer { false };
@@ -90,6 +91,7 @@ struct Options {
     bool                      deferred_show { false };
     bool                      spectrum_enabled { true };
     bool                      external_spectrum { false };
+    bool                      load_from_memory { false };
 };
 
 struct AppState {
@@ -98,16 +100,26 @@ struct AppState {
     std::chrono::steady_clock::time_point started_at { std::chrono::steady_clock::now() };
 };
 
+std::mutex& LifecycleOutputMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
 void EmitLifecycleEvent(const AppState* state, std::string_view event) {
-    static std::mutex output_mutex;
     const auto elapsed = state == nullptr
                              ? 0
                              : std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - state->started_at)
                                    .count();
-    std::lock_guard lock(output_mutex);
+    std::lock_guard lock(LifecycleOutputMutex());
     std::cout << "{\"event\":\"" << event << "\",\"elapsed_ms\":" << elapsed << "}\n"
               << std::flush;
+}
+
+void EmitAudioDemand(bool needed) {
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"audio-demand\",\"needed\":"
+              << (needed ? "true" : "false") << "}\n" << std::flush;
 }
 
 void PrintUsage(const char* argv0) {
@@ -117,6 +129,7 @@ void PrintUsage(const char* argv0) {
         << "Options:\n"
         << "  -f, --fps N                 Render FPS (default 30)\n"
         << "  -R, --resolution WxH        Override render resolution\n"
+        << "      --render-scale S        Render scale 0.25..1.0 (default 1.0)\n"
         << "  -C, --cache-path DIR        Cache directory\n"
         << "  -M, --msaa N                MSAA samples for screen RT\n"
         << "  -P, --user-properties FILE  JSON object of WE user properties\n"
@@ -130,6 +143,7 @@ void PrintUsage(const char* argv0) {
         << "      --deferred-show         Keep the window transparent until activated\n"
         << "      --no-spectrum           Disable audio response\n"
         << "      --external-spectrum     Receive spectrum from stdin\n"
+        << "      --load-from-memory      Keep the wallpaper package in memory\n"
         << "      --run-seconds N         Exit after N seconds (test helper)\n";
 }
 
@@ -219,6 +233,8 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             out.spectrum_enabled = false;
         } else if (arg == "--external-spectrum") {
             out.external_spectrum = true;
+        } else if (arg == "--load-from-memory") {
+            out.load_from_memory = true;
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
@@ -230,6 +246,10 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             if (value == nullptr) return false;
             out.resolution = ParseResolution(value);
             if (! out.resolution) return false;
+        } else if (arg == "--render-scale") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || ! ParseDouble(value, out.render_scale)) return false;
+            out.render_scale = std::clamp(out.render_scale, 0.25, 1.0);
         } else if (arg == "-C" || arg == "--cache-path") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
@@ -297,13 +317,6 @@ bool LoadUserProperties(const std::string& path, sr::SceneWallpaperConfig& confi
             ::alloc::string::String::make(key->as_str()), value->clone());
     });
     return true;
-}
-
-void LiveMetalFrameCallback(void* texture, std::uint32_t width, std::uint32_t height,
-                            void* userdata) {
-    auto* state = static_cast<AppState*>(userdata);
-    if (state == nullptr || state->desktop == nullptr) return;
-    SceneRendererMacDesktopPresent(state->desktop, texture, width, height);
 }
 
 void MouseMoveCallback(double x, double y, void* userdata) {
@@ -384,6 +397,11 @@ int main(int argc, char** argv) {
     if (options.resolution) {
         render_width  = options.resolution->width;
         render_height = options.resolution->height;
+    } else {
+        render_width = static_cast<std::uint32_t>(
+            std::lround(static_cast<double>(render_width) * options.render_scale));
+        render_height = static_cast<std::uint32_t>(
+            std::lround(static_cast<double>(render_height) * options.render_scale));
     }
 
     if (! wallpaper.init()) {
@@ -400,6 +418,7 @@ int main(int argc, char** argv) {
     config.muted           = options.muted;
     config.spectrum_enabled = options.spectrum_enabled;
     config.external_spectrum = options.external_spectrum;
+    config.load_from_memory = options.load_from_memory;
     if (options.cache_dir.empty())
         config.cache_dir = sr::platform::GetCachePath("SceneRenderer");
     else
@@ -410,18 +429,37 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    SceneRendererSetLiveMetalFrameCallback(LiveMetalFrameCallback, &state);
-
     sr::RenderInitInfo info;
     info.enable_valid_layer = options.valid_layer;
-    info.offscreen          = true;
+    info.offscreen          = false;
     info.width              = ClampRenderExtent(render_width, 1920);
     info.height             = ClampRenderExtent(render_height, 1080);
     info.msaa_samples       = options.msaa;
     info.redraw_callback    = [&state]() {
         SceneRendererMacDesktopWake(state.desktop);
     };
+    void* metal_layer = SceneRendererMacDesktopMetalLayer(state.desktop);
+    if (metal_layer == nullptr) {
+        std::cerr << "Failed to obtain CAMetalLayer for Vulkan surface\n";
+        SceneRendererMacDesktopDestroy(state.desktop);
+        return 1;
+    }
+    info.surface_info.instanceExts.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    info.surface_info.instanceExts.emplace_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+    info.surface_info.createSurfaceOp = [metal_layer](VkInstance instance, VkSurfaceKHR* surface) {
+        auto create_surface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(
+            vkGetInstanceProcAddr(instance, "vkCreateMetalSurfaceEXT"));
+        if (create_surface == nullptr) return VK_ERROR_EXTENSION_NOT_PRESENT;
+        VkMetalSurfaceCreateInfoEXT create_info {
+            .sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,
+            .pNext = nullptr,
+            .flags = 0,
+            .pLayer = metal_layer,
+        };
+        return create_surface(instance, &create_info, nullptr, surface);
+    };
 
+    wallpaper.setOnAudioDemand(EmitAudioDemand);
     wallpaper.configure(std::move(config));
     wallpaper.initVulkan(std::move(info));
 
@@ -479,7 +517,6 @@ int main(int argc, char** argv) {
     const int ok = SceneRendererMacDesktopRun(state.desktop);
 
     if (control) control->stop();
-    SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
     SceneRendererMacDesktopDestroy(state.desktop);
     state.desktop = nullptr;
     return ok ? 0 : 1;

@@ -913,6 +913,7 @@ public:
     bool isGenGraphviz() const { return m_config.graphviz; }
 
     void setOnClearColor(ClearColorCallback cb) { m_clear_color_cb = std::move(cb); }
+    void setOnAudioDemand(AudioDemandCallback cb) { m_audio_demand_cb = std::move(cb); }
 
 private:
     void loadScene();
@@ -928,6 +929,7 @@ private:
     FirstFrameCallback                           m_first_frame_callback;
     UserPropertyDiagnosticCallback               m_user_property_diagnostic_cb;
     ClearColorCallback                           m_clear_color_cb;
+    AudioDemandCallback                          m_audio_demand_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
     uint64_t                                     m_config_generation { 0 };
     uint64_t                                     m_prepared_scene_generation { 0 };
@@ -1612,7 +1614,7 @@ void SceneRuntimeController::loadScene() {
     // pass it to the scene parser; on fallback (loose dir) we have no
     // version info and use kSceneVersionUnknown.
     wpscene::SceneVersion pkg_v = wpscene::kSceneVersionUnknown;
-    auto                  wfs   = fs::WPPkgFs::CreatePkgFs(pkgPath);
+    auto                  wfs   = fs::WPPkgFs::CreatePkgFs(pkgPath, m_config.load_from_memory);
     if (wfs) pkg_v = wpscene::ParsePkgVersionStamp(wfs->pkg_version_stamp());
     if (! wfs || ! vfs.Mount("/assets", std::move(wfs))) {
         rstd_info("load pkg file {} failed, fallback to use dir", pkgPath);
@@ -1682,6 +1684,7 @@ void SceneRuntimeController::loadScene() {
             const auto& c = scene->clearColor;
             m_clear_color_cb(c[0], c[1], c[2]);
         }
+        if (m_audio_demand_cb) m_audio_demand_cb(scene->uses_audio_spectrum);
     }
 
     m_prepared_scene            = std::move(scene);
@@ -1862,6 +1865,10 @@ void SceneWallpaper::setUserPropertyJson(std::string_view name, Json value) {
 
 void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
     m_runtime->setOnClearColor(std::move(cb));
+}
+
+void SceneWallpaper::setOnAudioDemand(AudioDemandCallback cb) {
+    m_runtime->setOnAudioDemand(std::move(cb));
 }
 
 void SceneWallpaper::setOnFirstFrame(FirstFrameCallback cb) {

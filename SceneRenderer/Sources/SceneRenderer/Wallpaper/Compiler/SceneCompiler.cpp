@@ -137,6 +137,26 @@ bool SceneWritesLayerText(std::span<const SceneObjectVar> scene_objs) {
     return false;
 }
 
+bool SceneUsesAudioScripts(std::span<const SceneObjectVar> scene_objs) {
+    for (const auto& obj : scene_objs) {
+        bool found = false;
+        std::visit(
+            visitor::overload {
+                [&found](const auto& scene_obj) {
+                    for (const auto& [_, binding] : scene_obj.field_bindings.scripts) {
+                        if (binding.source.find("registerAudioBuffers") != std::string_view::npos) {
+                            found = true;
+                            break;
+                        }
+                    }
+                },
+            },
+            obj);
+        if (found) return true;
+    }
+    return false;
+}
+
 std::vector<std::string> DetectRegisteredAssets(std::string_view src) {
     std::vector<std::string> out;
     auto                     seen = std::unordered_set<std::string> {};
@@ -1509,6 +1529,12 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
 
     for (auto& unit : sd_units) {
         unit.src = WPShaderParser::PreShaderSrc(vfs, unit.src, pWPShaderInfo, texinfos);
+    }
+    for (const auto& unit : sd_units) {
+        if (unit.src.find("g_AudioSpectrum") != std::string::npos) {
+            pScene->uses_audio_spectrum = true;
+            break;
+        }
     }
     ApplyLegacyAtmosphereUniformAliases(wpmat, *pWPShaderInfo);
     ApplyLegacyAtmosphereShaderCompat(wpmat, sd_units);
@@ -3372,6 +3398,12 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         particle_obj.flags[wpscene::Particle::FlagEnum::wordspace]);
 
     particleSub->SetOwnerNode(spNode.as_ptr());
+    for (const auto& emitter : particle_obj.emitters) {
+        if (emitter.audioprocessingmode != 0) {
+            context.scene->uses_audio_spectrum = true;
+            break;
+        }
+    }
     LoadEmitter(*particleSub,
                 particle_obj,
                 override.count,
@@ -5169,6 +5201,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
     const auto ortho_extent = ResolveOrthoProjectionExtent(sc, scene_objs);
     auto       context      = BuildContext(vfs, scene_id, sc, ortho_extent, m_user_properties);
     context.scene_layer_text_writes = SceneWritesLayerText(scene_objs);
+    context.scene->uses_audio_spectrum = SceneUsesAudioScripts(scene_objs);
     context.hidden_link_source_ids =
         CollectHiddenLinkedSourceIds(json, linked_source_ids, m_user_properties);
 

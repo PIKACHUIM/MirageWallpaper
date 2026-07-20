@@ -1049,11 +1049,10 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 
     if (m_instance.offscreen()) {
         drawFrameOffscreen();
+        if (m_redraw_cb) m_redraw_cb();
     } else {
         drawFrameSwapchain();
     }
-
-    if (m_redraw_cb) m_redraw_cb();
 }
 
 void VulkanRender::Impl::drawFrameSwapchain() {
@@ -1136,6 +1135,7 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pImageIndices      = &image_index,
     };
     VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
+    if (m_redraw_cb) m_redraw_cb();
 
     VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
     ReleaseCompletedRetiredResources(rr);

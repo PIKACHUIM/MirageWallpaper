@@ -2541,6 +2541,7 @@ public:
     std::string scene_id { "unknown_id" };
 
     bool first_frame_ok { false };
+    bool uses_audio_spectrum { false };
 
     SceneMesh default_effect_mesh;
 
