@@ -70,6 +70,20 @@ struct PerformancePage: SettingsPage {
                     Text("MSAA ×8").tag(GSAntiAliasingQuality.msaa_x8)
                 }
 
+                Picker("渲染分辨率", selection: $viewModel.settings.textureResolution) {
+                    Text("原生（最高画质）").tag(GSTextureResolutionQuality.highQuality)
+                    Text("75%（自动）").tag(GSTextureResolutionQuality.automatic)
+                    Text("50%（高性能）").tag(GSTextureResolutionQuality.highPerformance)
+                }
+
+                Picker("壁纸加载方式", selection: Binding(
+                    get: { viewModel.settings.wallpaperLoadSource ?? .disk },
+                    set: { viewModel.settings.wallpaperLoadSource = $0 }
+                )) {
+                    Text("从磁盘加载（较低内存占用）").tag(GSWallpaperLoadSource.disk)
+                    Text("从内存加载（减少磁盘读取）").tag(GSWallpaperLoadSource.memory)
+                }
+
                 HStack {
                     Text("帧率")
                     Spacer()
@@ -89,11 +103,11 @@ struct PerformancePage: SettingsPage {
                     }
                 }
 
-                Toggle("启用音频频谱（网页壁纸）", isOn: $viewModel.settings.enableSpectrum)
+                Toggle("启用音频频谱（场景与网页壁纸）", isOn: $viewModel.settings.enableSpectrum)
             } header: {
                 Label("渲染质量", systemImage: "memorychip.fill")
             } footer: {
-                Text("抗锯齿在切换壁纸后生效；帧率调节实时生效。质量选项主要作用于场景壁纸。")
+                Text("抗锯齿、渲染分辨率和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

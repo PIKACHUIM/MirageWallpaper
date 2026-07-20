@@ -59,6 +59,13 @@ final class SystemAudioSpectrumService {
     private var smoothedRight = [Float](repeating: 0, count: binCount)
     private var bandEdges = [Int](repeating: 0, count: binCount + 1)
     private var bandGain = [Float](repeating: 0, count: binCount)
+    private var analysisLeft = [Float](repeating: 0, count: fftSize)
+    private var analysisRight = [Float](repeating: 0, count: fftSize)
+    private var imaginaryInput = [Float](repeating: 0, count: fftSize)
+    private var realOutputLeft = [Float](repeating: 0, count: fftSize)
+    private var imaginaryOutputLeft = [Float](repeating: 0, count: fftSize)
+    private var realOutputRight = [Float](repeating: 0, count: fftSize)
+    private var imaginaryOutputRight = [Float](repeating: 0, count: fftSize)
     private var sampleRate: Float = 48_000
 
     private init() {
@@ -302,14 +309,14 @@ final class SystemAudioSpectrumService {
         ringFilled = 0
         lastInputNanos = 0
         os_unfair_lock_unlock(&inputLock)
-        smoothedLeft = [Float](repeating: 0, count: Self.binCount)
-        smoothedRight = [Float](repeating: 0, count: Self.binCount)
+        smoothedLeft.withUnsafeMutableBufferPointer { $0.initialize(repeating: 0) }
+        smoothedRight.withUnsafeMutableBufferPointer { $0.initialize(repeating: 0) }
     }
 
     private func analyzeAndPublish() {
         guard let dftSetup else { return }
-        var left = [Float](repeating: 0, count: Self.fftSize)
-        var right = [Float](repeating: 0, count: Self.fftSize)
+        analysisLeft.withUnsafeMutableBufferPointer { $0.initialize(repeating: 0) }
+        analysisRight.withUnsafeMutableBufferPointer { $0.initialize(repeating: 0) }
         let now = DispatchTime.now().uptimeNanoseconds
         var fresh = false
 
@@ -322,23 +329,27 @@ final class SystemAudioSpectrumService {
             let offset = Self.fftSize - filled
             for index in 0..<filled {
                 let source = (start + index) & (Self.ringSize - 1)
-                left[offset + index] = ringLeft[source]
-                right[offset + index] = ringRight[source]
+                analysisLeft[offset + index] = ringLeft[source]
+                analysisRight[offset + index] = ringRight[source]
             }
         }
         os_unfair_lock_unlock(&inputLock)
 
         if fresh {
-            vDSP_vmul(left, 1, hann, 1, &left, 1, vDSP_Length(Self.fftSize))
-            vDSP_vmul(right, 1, hann, 1, &right, 1, vDSP_Length(Self.fftSize))
+            vDSP_vmul(analysisLeft, 1, hann, 1, &analysisLeft, 1, vDSP_Length(Self.fftSize))
+            vDSP_vmul(analysisRight, 1, hann, 1, &analysisRight, 1, vDSP_Length(Self.fftSize))
+            Self.transform(analysisLeft, setup: dftSetup, imaginaryInput: imaginaryInput,
+                           realOutput: &realOutputLeft, imaginaryOutput: &imaginaryOutputLeft)
+            Self.transform(analysisRight, setup: dftSetup, imaginaryInput: imaginaryInput,
+                           realOutput: &realOutputRight, imaginaryOutput: &imaginaryOutputRight)
         }
-        let rawLeft = transform(left, setup: dftSetup)
-        let rawRight = transform(right, setup: dftSetup)
         let dt: Float = 1.0 / 30.0
         var output = [Float](repeating: 0, count: Self.binCount * 2)
         for bin in 0..<Self.binCount {
-            let targetLeft = fresh ? response(rawLeft, bin: bin) : 0
-            let targetRight = fresh ? response(rawRight, bin: bin) : 0
+            let targetLeft = fresh ? response(real: realOutputLeft,
+                                              imaginary: imaginaryOutputLeft, bin: bin) : 0
+            let targetRight = fresh ? response(real: realOutputRight,
+                                               imaginary: imaginaryOutputRight, bin: bin) : 0
             smoothedLeft[bin] = smooth(previous: smoothedLeft[bin], current: targetLeft, dt: dt)
             smoothedRight[bin] = smooth(previous: smoothedRight[bin], current: targetRight, dt: dt)
             output[bin] = smoothedLeft[bin]
@@ -347,10 +358,10 @@ final class SystemAudioSpectrumService {
         onSpectrum?(output)
     }
 
-    private func transform(_ input: [Float], setup: vDSP_DFT_Setup) -> ([Float], [Float]) {
-        let imaginaryInput = [Float](repeating: 0, count: Self.fftSize)
-        var realOutput = [Float](repeating: 0, count: Self.fftSize)
-        var imaginaryOutput = [Float](repeating: 0, count: Self.fftSize)
+    private static func transform(_ input: [Float], setup: vDSP_DFT_Setup,
+                                  imaginaryInput: [Float],
+                                  realOutput: inout [Float],
+                                  imaginaryOutput: inout [Float]) {
         input.withUnsafeBufferPointer { realInput in
             imaginaryInput.withUnsafeBufferPointer { imaginaryInput in
                 realOutput.withUnsafeMutableBufferPointer { realOutput in
@@ -363,15 +374,14 @@ final class SystemAudioSpectrumService {
                 }
             }
         }
-        return (realOutput, imaginaryOutput)
     }
 
-    private func response(_ spectrum: ([Float], [Float]), bin: Int) -> Float {
+    private func response(real: [Float], imaginary: [Float], bin: Int) -> Float {
         let low = bandEdges[bin]
         let high = max(bandEdges[bin + 1], low + 1)
         var magnitude: Float = 0
         for index in low..<high {
-            magnitude += hypotf(spectrum.0[index], spectrum.1[index])
+            magnitude += hypotf(real[index], imaginary[index])
         }
         magnitude = magnitude / Float(high - low) * (2.0 / Float(Self.fftSize))
         let compensated = max(magnitude * bandGain[bin], 1.0e-12)

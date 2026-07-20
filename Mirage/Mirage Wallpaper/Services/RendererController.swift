@@ -31,6 +31,7 @@ final class RendererProcess {
     var desiredMuted: Bool
     var desiredPaused = false
     let spectrumEnabled: Bool
+    var spectrumDemanded: Bool
 
     private let stateLock = NSLock()
     private let writeLock = NSLock()
@@ -63,6 +64,7 @@ final class RendererProcess {
         self.desiredVolume = desiredVolume
         self.desiredMuted = desiredMuted
         self.spectrumEnabled = spectrumEnabled
+        self.spectrumDemanded = false
     }
 
     func send(_ command: [String: Any]) {
@@ -198,6 +200,9 @@ struct RenderOptions {
     var speed: Float = 1.0
     var fillMode: FillMode = .cover
     var enableSpectrum: Bool = true
+    var renderScale: Double = 1.0
+    var msaaSamples: Int = 1
+    var loadFromMemory: Bool = false
     var userProperties: [String: WEProjectProperty] = [:]
 }
 
@@ -357,6 +362,9 @@ final class RendererController {
             NSLog("[Mirage] 场景参数: assets=\(assetsPath) exists=\(FileManager.default.fileExists(atPath: assetsPath)) pkg=\(pkgPath) exists=\(FileManager.default.fileExists(atPath: pkgPath))")
             args += [assetsPath, pkgPath]
             args += ["--fps", String(options.fps)]
+            args += ["--render-scale", String(format: "%.3f", options.renderScale)]
+            args += ["--msaa", String(options.msaaSamples)]
+            if options.loadFromMemory { args += ["--load-from-memory"] }
             args += ["--screen", String(screenIndex)]
             // Candidates stay transparent and silent until Metal confirms a
             // presented frame and Mirage explicitly activates them.
@@ -382,6 +390,7 @@ final class RendererController {
                 args += ["--asset-overlay", overlay.path]
             }
             args += ["--fps", String(options.fps)]
+            if options.loadFromMemory { args += ["--load-from-memory"] }
             args += ["--volume", String(format: "%.3f", options.muted ? 0 : options.volume)]
             args += ["--screen", String(screenIndex)]
             if options.enableSpectrum {
@@ -396,6 +405,7 @@ final class RendererController {
             args += ["--screen", String(screenIndex)]
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--fill", options.fillMode.rawValue]
+            if options.loadFromMemory { args += ["--load-from-memory"] }
             if options.muted { args += ["--muted"] }
             args += ["--control-stdin"]
 
@@ -404,7 +414,7 @@ final class RendererController {
         }
 
         let stdinPipe = Pipe()
-        let stdoutPipe = deferredScene ? Pipe() : nil
+        let stdoutPipe = (deferredScene || wallpaper.kind == .web) ? Pipe() : nil
         let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
         if let stdoutPipe {
@@ -533,8 +543,17 @@ final class RendererController {
         let elapsed = (message["elapsed_ms"] as? NSNumber)?.intValue
         queue.async { [weak self, weak handle] in
             guard let self, let handle,
-                  self.candidates[handle.screenIndex] === handle,
                   self.generations[handle.screenIndex] == handle.generation else { return }
+
+            if event == "audio-demand" {
+                guard self.running[handle.screenIndex] === handle ||
+                      self.candidates[handle.screenIndex] === handle else { return }
+                handle.spectrumDemanded = (message["needed"] as? NSNumber)?.boolValue ?? false
+                SystemAudioSpectrumService.shared.setEnabled(self.hasSpectrumConsumersLocked())
+                return
+            }
+
+            guard self.candidates[handle.screenIndex] === handle else { return }
 
             switch event {
             case "vulkan-ready", "scene-ready":
@@ -631,8 +650,12 @@ final class RendererController {
     }
 
     private func hasSpectrumConsumersLocked() -> Bool {
-        running.values.contains { $0.spectrumEnabled && $0.process.isRunning } ||
-            candidates.values.contains { $0.spectrumEnabled && $0.process.isRunning }
+        running.values.contains { self.needsSpectrum($0) }
+    }
+
+    private func needsSpectrum(_ process: RendererProcess) -> Bool {
+        process.spectrumEnabled && process.spectrumDemanded &&
+            !process.desiredPaused && process.process.isRunning
     }
 
     private func refreshAudioSpectrumService() {
@@ -643,11 +666,10 @@ final class RendererController {
     private func setAudioSpectrum(_ spectrum: [Float]) {
         guard spectrum.count == 128 else { return }
         let processes = queue.sync {
-            Array(running.values) + Array(candidates.values)
+            running.values.filter { self.needsSpectrum($0) }
         }
         for process in processes {
-            guard process.spectrumEnabled,
-                  process.wallpaper.kind == .scene || process.wallpaper.kind == .web else { continue }
+            guard process.wallpaper.kind == .scene || process.wallpaper.kind == .web else { continue }
             process.sendSpectrum(spectrum)
         }
     }
@@ -707,6 +729,7 @@ final class RendererController {
                 }
             }
         }
+        refreshAudioSpectrumService()
     }
 
     func setFps(_ fps: Int, on screenIndex: Int? = nil) {

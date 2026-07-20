@@ -35,6 +35,11 @@ enum GSTextureResolutionQuality: String, CaseIterable, Identifiable, Codable {
     case highQuality, highPerformance, automatic
 }
 
+enum GSWallpaperLoadSource: String, CaseIterable, Identifiable, Codable {
+    var id: Self { self }
+    case disk, memory
+}
+
 enum GSAppearance: String, CaseIterable, Identifiable, Codable {
     var id: Self { self }
     case light, dark, followSystem
@@ -85,6 +90,8 @@ struct GlobalSettings: Codable, Equatable {
     var antiAliasing = GSAntiAliasingQuality.msaa_x2
     var postProcessing = GSPostProcessingQuality.disabled
     var textureResolution = GSTextureResolutionQuality.automatic
+    // Optional keeps settings written by older Mirage versions decodable.
+    var wallpaperLoadSource: GSWallpaperLoadSource? = .disk
     var reflections = false
     var fps: Double = 30
     
@@ -168,10 +175,10 @@ class GlobalSettingsViewModel: ObservableObject {
     @Published var isFirstLaunch = UserDefaults.standard.value(forKey: "IsFirstLaunch") as? Bool ?? true
     
     var didFinishLaunchingNotificationCancellable: Cancellable?
-    var didActivateApplicationNotificationCancellable: Cancellable?
     var didCurrentWallpaperChangeCancellable: Cancellable?
     var didAddToLoginItemCancellable: Cancellable?
     var didChangeAdjustMenuBarTintCancellable: Cancellable?
+    var playbackPolicySettingsCancellable: Cancellable?
     
     init() {
         if let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
@@ -190,27 +197,21 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     deinit {
-        didActivateApplicationNotificationCancellable?.cancel()
         didFinishLaunchingNotificationCancellable?.cancel()
         didCurrentWallpaperChangeCancellable?.cancel()
         didAddToLoginItemCancellable?.cancel()
         didChangeAdjustMenuBarTintCancellable?.cancel()
+        playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
         playbackEvalWorkItem?.cancel()
         for observer in workspacePlaybackObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         if let desktopClickMonitor { NSEvent.removeMonitor(desktopClickMonitor) }
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
     
     func didFinishLaunchingNotification() {
-        // NSWorkspace posts activation notifications on its own notification
-        // center, not the default one, so subscribe there or the handler never
-        // fires and the reveal latch never clears on app switches.
-        self.didActivateApplicationNotificationCancellable =
-        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
-            .sink { [weak self] _ in self?.activateApplicationDidChange() }
-        
         self.didCurrentWallpaperChangeCancellable =
         AppDelegate.shared.wallpaperViewModel.$currentWallpaper
             .sink { [weak self] in self?.didCurrentWallpaperChange($0) }
@@ -234,45 +235,17 @@ class GlobalSettingsViewModel: ObservableObject {
             self, selector: #selector(displayDidWake),
             name: NSWorkspace.screensDidWakeNotification, object: nil)
 
-        let playbackNotifications: [Notification.Name] = [
-            NSWorkspace.activeSpaceDidChangeNotification,
-            NSWorkspace.didActivateApplicationNotification,
-            NSWorkspace.didDeactivateApplicationNotification,
-            NSWorkspace.didHideApplicationNotification,
-            NSWorkspace.didUnhideApplicationNotification,
-            NSWorkspace.didLaunchApplicationNotification,
-            NSWorkspace.didTerminateApplicationNotification
-        ]
-        for name in playbackNotifications {
-            let observer = NSWorkspace.shared.notificationCenter.addObserver(
-                forName: name, object: nil, queue: .main
-            ) { [weak self] _ in
-                self?.schedulePlaybackEvaluation()
-            }
-            workspacePlaybackObservers.append(observer)
-        }
-        desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            guard let self else { return }
-            // A click on bare desktop toggles the reveal: the first one reveals
-            // the desktop (windows slide away), the next one collapses it back.
-            // Both clicks hit-test as "on desktop" because the windows are off
-            // screen while revealed, so we must toggle rather than assign.
-            // A click that lands on any on-screen UI (an app window, the Dock,
-            // the menu bar) is never a reveal gesture and clears the latch.
-            if self.clickLandedOnDesktop(at: NSEvent.mouseLocation) {
-                self.desktopRevealed.toggle()
-            } else {
-                self.desktopRevealed = false
-            }
-            self.schedulePlaybackEvaluation()
-        }
-
-        self.playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.evaluatePlaybackState()
-        }
-
         self.validate()
-        self.evaluatePlaybackState()
+        playbackPolicySettingsCancellable = $settings
+            .map {
+                [$0.otherApplicationFocused, $0.otherApplicationFullscreen,
+                 $0.otherApplicationPlayingAudio, $0.displayAsleep, $0.laptopOnBattery]
+            }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.configurePlaybackMonitoring() }
+
+        self.configurePlaybackMonitoring()
     }
 
     private var displayAsleep = false
@@ -282,6 +255,78 @@ class GlobalSettingsViewModel: ObservableObject {
     private var desktopClickMonitor: Any?
     private var desktopRevealed = false
     private(set) var effectivePlaybackAction = GSPlayback.keepRunning
+
+    private func configurePlaybackMonitoring() {
+        playbackEvalTimer?.invalidate()
+        playbackEvalTimer = nil
+        playbackEvalWorkItem?.cancel()
+        playbackEvalWorkItem = nil
+        for observer in workspacePlaybackObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        workspacePlaybackObservers.removeAll()
+        if let desktopClickMonitor {
+            NSEvent.removeMonitor(desktopClickMonitor)
+            self.desktopClickMonitor = nil
+        }
+
+        let focusRulesEnabled = settings.otherApplicationFocused != .keepRunning ||
+            settings.otherApplicationFullscreen != .keepRunning
+        let anyRuleEnabled = focusRulesEnabled ||
+            settings.otherApplicationPlayingAudio != .keepRunning ||
+            settings.displayAsleep != .keepRunning ||
+            settings.laptopOnBattery != .keepRunning
+
+        guard anyRuleEnabled,
+              AppDelegate.shared.wallpaperViewModel.currentWallpaper.isValid else {
+            effectivePlaybackAction = .keepRunning
+            AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicy(.keepRunning)
+            return
+        }
+
+        if focusRulesEnabled {
+            let playbackNotifications: [Notification.Name] = [
+                NSWorkspace.activeSpaceDidChangeNotification,
+                NSWorkspace.didActivateApplicationNotification,
+                NSWorkspace.didDeactivateApplicationNotification,
+                NSWorkspace.didHideApplicationNotification,
+                NSWorkspace.didUnhideApplicationNotification,
+                NSWorkspace.didLaunchApplicationNotification,
+                NSWorkspace.didTerminateApplicationNotification
+            ]
+            for name in playbackNotifications {
+                let observer = NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in
+                    if name == NSWorkspace.didActivateApplicationNotification {
+                        self?.activateApplicationDidChange()
+                    } else {
+                        self?.schedulePlaybackEvaluation()
+                    }
+                }
+                workspacePlaybackObservers.append(observer)
+            }
+            desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) {
+                [weak self] _ in
+                guard let self else { return }
+                if self.clickLandedOnDesktop(at: NSEvent.mouseLocation) {
+                    self.desktopRevealed.toggle()
+                } else {
+                    self.desktopRevealed = false
+                }
+                self.schedulePlaybackEvaluation()
+            }
+        }
+
+        let pollingRuleEnabled = settings.otherApplicationPlayingAudio != .keepRunning ||
+            settings.laptopOnBattery != .keepRunning
+        if pollingRuleEnabled {
+            playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) {
+                [weak self] _ in self?.evaluatePlaybackState()
+            }
+        }
+        evaluatePlaybackState()
+    }
 
     @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
     @objc private func displayDidWake()  { displayAsleep = false; evaluatePlaybackState() }
@@ -323,17 +368,16 @@ class GlobalSettingsViewModel: ObservableObject {
                 try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: .main!)
             }
         } else {
-            do {
-                let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "staticWP_\(AppDelegate.shared.wallpaperViewModel.currentWallpaper.wallpaperDirectory.hashValue).tiff")
-                try NSWorkspace.shared.setDesktopImageURL(url, for: .main!)
-            } catch {
-                print(error)
-            }
+            AppDelegate.shared.setPlaceholderWallpaper(
+                with: AppDelegate.shared.wallpaperViewModel.currentWallpaper)
         }
     }
     
     func didCurrentWallpaperChange(_ newValue: WEWallpaper) {
         AppDelegate.shared.setPlaceholderWallpaper(with: newValue)
+        if playbackPolicySettingsCancellable != nil {
+            DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
+        }
     }
     
     func reset() {
@@ -354,19 +398,19 @@ class GlobalSettingsViewModel: ObservableObject {
         case .low:
             self.settings.antiAliasing = .none
             self.settings.postProcessing = .disabled
-            self.settings.textureResolution = .highQuality
+            self.settings.textureResolution = .highPerformance
             self.settings.fps = 10
             self.settings.reflections = false
         case .medium:
             self.settings.antiAliasing = .none
             self.settings.postProcessing = .enabled
-            self.settings.textureResolution = .highQuality
+            self.settings.textureResolution = .automatic
             self.settings.fps = 15
             self.settings.reflections = true
         case .high:
             self.settings.antiAliasing = .msaa_x2
             self.settings.postProcessing = .enabled
-            self.settings.textureResolution = .highQuality
+            self.settings.textureResolution = .automatic
             self.settings.fps = 25
             self.settings.reflections = true
         case .ultra:
@@ -404,29 +448,34 @@ class GlobalSettingsViewModel: ObservableObject {
     func evaluatePlaybackState() {
         var actions: [GSPlayback] = []
 
-        if displayAsleep { actions.append(settings.displayAsleep) }
+        if settings.displayAsleep != .keepRunning, displayAsleep {
+            actions.append(settings.displayAsleep)
+        }
 
-        if isOnBattery() { actions.append(settings.laptopOnBattery) }
+        if settings.laptopOnBattery != .keepRunning, isOnBattery() {
+            actions.append(settings.laptopOnBattery)
+        }
 
-        let front = NSWorkspace.shared.frontmostApplication
-        let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        // The desktop is being viewed if the user latched a reveal gesture by
-        // clicking empty desktop, or if window geometry currently shows no app
-        // window covering a screen. The latch survives the reveal animation,
-        // which the geometry heuristic alone cannot reliably observe.
-        let desktopViewed = desktopRevealed || isDesktopExposed()
-        let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
-            && !appHasVisibleWindows(pid: front?.processIdentifier)
+        if settings.otherApplicationFocused != .keepRunning ||
+            settings.otherApplicationFullscreen != .keepRunning {
+            let front = NSWorkspace.shared.frontmostApplication
+            let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            let desktopViewed = desktopRevealed || isDesktopExposed()
+            let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
+                && !appHasVisibleWindows(pid: front?.processIdentifier)
 
-        if let front, front.activationPolicy == .regular, !isSelf, !isDesktopFinder, !desktopViewed {
-            if appIsFullscreen(pid: front.processIdentifier) {
-                actions.append(settings.otherApplicationFullscreen)
-            } else {
-                actions.append(settings.otherApplicationFocused)
+            if let front, front.activationPolicy == .regular, !isSelf,
+               !isDesktopFinder, !desktopViewed {
+                if appIsFullscreen(pid: front.processIdentifier) {
+                    actions.append(settings.otherApplicationFullscreen)
+                } else {
+                    actions.append(settings.otherApplicationFocused)
+                }
             }
         }
 
-        if isOtherAppPlayingAudio() {
+        if settings.otherApplicationPlayingAudio != .keepRunning,
+           isOtherAppPlayingAudio() {
             actions.append(settings.otherApplicationPlayingAudio)
         }
 
