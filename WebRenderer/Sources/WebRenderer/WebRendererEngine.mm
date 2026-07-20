@@ -221,7 +221,16 @@ static NSString *const kShimJS = @"\
     if(listener&&typeof listener.applyUserProperties==='function'){\
       try {\
         var applied=__wr_pendingProps;\
-        if(Object.keys(applied).length){listener.applyUserProperties(applied);__wr_pendingProps={};}\
+        if(Object.keys(applied).length){\
+          listener.applyUserProperties(applied);__wr_pendingProps={};\
+          /* WebKit does not consistently expose direct CSSStyleDeclaration \
+             property assignments through overridable JS setters. Legacy WE \
+             pages commonly set style.background='url(file:///...)' inside \
+             applyUserProperties. Scan once after that callback instead of \
+             permanently observing every style mutation. */\
+          __wr_scanElementAssets(document.documentElement);\
+          __nativeSetTimeout(function(){__wr_scanElementAssets(document.documentElement);},0);\
+        }\
         return true;\
       }\
       catch(e){ console.error('WebRenderer applyUserProperties:',e); }\
