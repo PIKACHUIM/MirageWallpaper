@@ -46,6 +46,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Select newest Xcode
+        shell: bash
+        run: |
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -z "$newest" ]]; then
+            echo "::error::No Xcode found on the runner."
+            exit 1
+          fi
+          sudo xcode-select -s "$newest/Contents/Developer"
+          xcodebuild -version
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "Selected macOS SDK: $sdk"
+          major="${sdk%%.*}"
+          if (( major < 26 )); then
+            echo "::error::macOS 26 SDK is required to link the current system UI, but the newest available SDK is $sdk. Update the runner image or install Xcode 26."
+            exit 1
+          fi
+
       - name: Validate build secret
         shell: bash
         env:
