@@ -211,7 +211,7 @@ class GlobalSettingsViewModel: ObservableObject {
         didChangeAdjustMenuBarTintCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
-        playbackEvalWorkItem?.cancel()
+        settlingEvalWorkItems.forEach { $0.cancel() }
         for observer in workspacePlaybackObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -258,17 +258,22 @@ class GlobalSettingsViewModel: ObservableObject {
 
     private var displayAsleep = false
     private var playbackEvalTimer: Timer?
-    private var playbackEvalWorkItem: DispatchWorkItem?
+    private var settlingEvalWorkItems: [DispatchWorkItem] = []
     private var workspacePlaybackObservers: [NSObjectProtocol] = []
     private var desktopClickMonitor: Any?
-    private var desktopRevealed = false
+    // A click on bare desktop starts the reveal-desktop animation, during which
+    // windows are still covering the screen and geometry detection would wrongly
+    // report the desktop as hidden. We briefly trust the click as a reveal hint
+    // to bridge that animation, then hand back to the geometry truth.
+    private var lastDesktopRevealHintAt: Date = .distantPast
+    private static let desktopRevealGrace: TimeInterval = 1.2
     private(set) var effectivePlaybackAction = GSPlayback.keepRunning
 
     private func configurePlaybackMonitoring() {
         playbackEvalTimer?.invalidate()
         playbackEvalTimer = nil
-        playbackEvalWorkItem?.cancel()
-        playbackEvalWorkItem = nil
+        settlingEvalWorkItems.forEach { $0.cancel() }
+        settlingEvalWorkItems.removeAll()
         for observer in workspacePlaybackObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -309,7 +314,7 @@ class GlobalSettingsViewModel: ObservableObject {
                     if name == NSWorkspace.didActivateApplicationNotification {
                         self?.activateApplicationDidChange()
                     } else {
-                        self?.schedulePlaybackEvaluation()
+                        self?.scheduleSettlingEvaluations()
                     }
                 }
                 workspacePlaybackObservers.append(observer)
@@ -317,19 +322,25 @@ class GlobalSettingsViewModel: ObservableObject {
             desktopClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) {
                 [weak self] _ in
                 guard let self else { return }
+                // A click on bare desktop begins a reveal. Record the hint so the
+                // grace window bridges the reveal animation, then let the settling
+                // re-evaluations confirm the state from real window geometry.
                 if self.clickLandedOnDesktop(at: NSEvent.mouseLocation) {
-                    self.desktopRevealed.toggle()
-                } else {
-                    self.desktopRevealed = false
+                    self.lastDesktopRevealHintAt = Date()
                 }
-                self.schedulePlaybackEvaluation()
+                self.scheduleSettlingEvaluations()
             }
         }
 
-        let pollingRuleEnabled = settings.otherApplicationPlayingAudio != .keepRunning ||
+        // Focus/fullscreen rules also poll: revealing the desktop (click-wallpaper,
+        // F11, hot corners, Mission Control) and re-covering it emit no reliable
+        // notification, so periodic geometry checks keep playback correct.
+        let pollingRuleEnabled = focusRulesEnabled ||
+            settings.otherApplicationPlayingAudio != .keepRunning ||
             settings.laptopOnBattery != .keepRunning
         if pollingRuleEnabled {
-            playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) {
+            let interval: TimeInterval = focusRulesEnabled ? 1.0 : 2.0
+            playbackEvalTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
                 [weak self] _ in self?.evaluatePlaybackState()
             }
         }
@@ -339,11 +350,19 @@ class GlobalSettingsViewModel: ObservableObject {
     @objc private func displayDidSleep() { displayAsleep = true; evaluatePlaybackState() }
     @objc private func displayDidWake()  { displayAsleep = false; evaluatePlaybackState() }
 
-    private func schedulePlaybackEvaluation() {
-        playbackEvalWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.evaluatePlaybackState() }
-        playbackEvalWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    // Revealing or re-covering the desktop animates windows over ~0.3–0.5s, and
+    // macOS posts no notification when that animation ends. A single debounced
+    // evaluation therefore samples window geometry mid-flight and sticks with a
+    // stale result. Instead fire a short burst of re-evaluations that straddle
+    // the animation so playback settles on the real, post-animation geometry.
+    private func scheduleSettlingEvaluations() {
+        settlingEvalWorkItems.forEach { $0.cancel() }
+        settlingEvalWorkItems.removeAll()
+        for delay in [0.05, 0.35, 0.7, 1.1] {
+            let work = DispatchWorkItem { [weak self] in self?.evaluatePlaybackState() }
+            settlingEvalWorkItems.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
     }
     
     func didAddToLoginItem(_ added: Bool) {
@@ -447,15 +466,10 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     func activateApplicationDidChange() {
-        // A reveal-desktop gesture never changes the frontmost app, so any
-        // genuine activation of another regular app means the desktop is no
-        // longer being viewed. Clear the latch so focus rules apply again.
-        let front = NSWorkspace.shared.frontmostApplication
-        let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        if let front, front.activationPolicy == .regular, !isSelf {
-            desktopRevealed = false
-        }
-        evaluatePlaybackState()
+        // Activating another app can settle window geometry over a few frames
+        // (a reveal collapsing, a window coming forward). Re-evaluate as it
+        // settles instead of trusting a single mid-animation sample.
+        scheduleSettlingEvaluations()
     }
 
     func evaluatePlaybackState() {
@@ -473,7 +487,8 @@ class GlobalSettingsViewModel: ObservableObject {
             settings.otherApplicationFullscreen != .keepRunning {
             let front = NSWorkspace.shared.frontmostApplication
             let isSelf = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-            let desktopViewed = desktopRevealed || isDesktopExposed()
+            let withinRevealGrace = Date().timeIntervalSince(lastDesktopRevealHintAt) < Self.desktopRevealGrace
+            let desktopViewed = withinRevealGrace || isDesktopExposed()
             let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
                 && !appHasVisibleWindows(pid: front?.processIdentifier)
 
