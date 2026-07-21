@@ -180,6 +180,21 @@ final class WallpaperLibrary {
             .filter { fm.fileExists(atPath: $0.appending(path: "project.json").path) }
     }
 
+    /// Every installed workshop item keyed by its directory name (the workshop
+    /// id). First occurrence wins when the same id exists in multiple sources.
+    /// Used to build the installed-state snapshot off the main thread so card
+    /// views never touch the filesystem while rendering.
+    func allWorkshopIDDirectories() -> [(id: String, url: URL)] {
+        var result: [(id: String, url: URL)] = []
+        var seen = Set<String>()
+        for url in allWallpaperURLs() {
+            let id = url.lastPathComponent
+            guard seen.insert(id).inserted else { continue }
+            result.append((id, url))
+        }
+        return result
+    }
+
     func loadAll() -> [WEWallpaper] {
         let urls = allWallpaperURLs()
         loadCacheLock.lock()
